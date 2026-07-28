@@ -43,6 +43,14 @@ Key flags: `--align translation|euclidean|none`, `--anchor cx,cy,w,h` (fractions
 - `align_frames` returns per-frame ECC correlation scores. cc >= 0.85 is a solid
   lock, below 0.80 the frame is reported as a weak lock and will visibly jump.
   This is the signal that used to be discarded, which is why bad frames were silent.
+- `export_gif` writes through Pillow, not imageio, so the Graphic Control Extension
+  is under our control. The original call passed `duration=1.0/fps` to imageio, whose
+  Pillow plugin expects **milliseconds** — 0.125 rounded to 0 and Pillow then emitted
+  no GCE at all, so the GIFs carried no frame delay and no disposal method. They
+  looped in browsers (the NETSCAPE block was present) but would not play on Android.
+  Delay is now quantised to centiseconds, floored at 2cs, with disposal set to
+  do-not-dispose. `export_gif` returns the effective fps, since the centisecond grid
+  rounds it (8fps becomes 8.33, and anything above 50fps clamps).
 - `--repair-weak` (opt-in) replaces weak frames' shifts with a linear fit through
   the frames that did lock. The four lenses sit on a fixed pitch, so shift is
   linear in frame index for any one depth plane. Needs >= 2 good frames; with

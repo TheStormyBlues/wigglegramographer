@@ -41,8 +41,8 @@ Build in two stages rather than committing to a platform up front:
 A fully hosted, shareable web app (for other Nimslo shooters) is a good long-term
 goal, but save it until the tool reliably makes good wiggles.
 
-Core stack: Python, OpenCV (cropping + alignment), NumPy, imageio / Pillow
-(GIF / MP4 / WebP export).
+Core stack: Python, OpenCV (cropping + alignment), NumPy, Pillow (GIF export).
+MP4 / WebP export will need an encoder such as imageio-ffmpeg added back.
 
 ## Technical pipeline
 1. **Ingest** — load the scan; optional deskew.

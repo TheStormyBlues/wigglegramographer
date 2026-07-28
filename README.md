@@ -122,6 +122,14 @@ scenes, because a dark row drags the row average below the detection threshold.
 Use `--pick-anchor` and drag the green band edges outward, or pass `--band y0,y1`
 directly.
 
+**The GIF won't animate on a phone** — GIF keeps its frame delay in a Graphic
+Control Extension, and a file without one plays at whatever speed the decoder
+guesses, or not at all. Browsers are forgiving; Android is not. Every GIF written
+here carries an explicit delay, a do-not-dispose disposal method, and an infinite
+loop block. Note that the format stores delay in hundredths of a second, so the
+frame rate is rounded to that grid — `--fps 8` really plays at 8.33, and anything
+above 50 is capped. The run prints the effective rate.
+
 ## Roadmap
 
 - **Phase 1 — MVP:** crop four frames → ping-pong GIF. ✅

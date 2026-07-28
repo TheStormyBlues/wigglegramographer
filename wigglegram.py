@@ -29,7 +29,7 @@ import argparse
 import os
 import numpy as np
 import cv2
-import imageio.v2 as imageio
+from PIL import Image
 
 
 # ----------------------------------------------------------------------------
@@ -455,13 +455,29 @@ def build_sequence(frames, pingpong=True, reverse=False):
 
 
 def export_gif(seq, path, fps=8, max_height=600):
-    out = []
+    """Write a looping GIF with explicit per-frame timing and disposal.
+
+    GIF stores the frame delay in centiseconds inside a Graphic Control
+    Extension. Quantise to centiseconds here rather than leaving it to the
+    encoder: a delay that rounds to 0 makes some decoders (notably Android's)
+    fall back to a default speed or refuse to animate, and a delay under 2cs is
+    widely clamped. Disposal is set explicitly to "do not dispose" — the frames
+    are full-size and opaque, so each simply replaces the last.
+
+    Returns the effective fps, which the centisecond grid may round.
+    """
+    frames = []
     for f in seq:
         if max_height and f.shape[0] > max_height:
             s = max_height / f.shape[0]
             f = cv2.resize(f, (int(f.shape[1] * s), max_height), interpolation=cv2.INTER_AREA)
-        out.append(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
-    imageio.mimsave(path, out, format="GIF", duration=1.0 / fps, loop=0)
+        frames.append(Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)))
+
+    cs = max(2, int(round(100.0 / fps)))
+    pal = [f.convert("P", palette=Image.ADAPTIVE, colors=256) for f in frames]
+    pal[0].save(path, save_all=True, append_images=pal[1:], duration=cs * 10,
+                loop=0, disposal=1, optimize=False)
+    return 100.0 / cs
 
 
 # ----------------------------------------------------------------------------
@@ -559,8 +575,10 @@ def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
         frames = normalize_sizes(frames)
 
     seq = build_sequence(frames, pingpong=pingpong, reverse=reverse)
-    export_gif(seq, out, fps=fps, max_height=max_height)
-    print(f"  wrote     : {out}  ({len(seq)} frames @ {fps}fps, {frames[0].shape[1]}x{frames[0].shape[0]})")
+    eff = export_gif(seq, out, fps=fps, max_height=max_height)
+    rounded = "" if abs(eff - fps) < 0.05 else f" (requested {fps}, rounded to the GIF 10ms grid)"
+    print(f"  wrote     : {out}  ({len(seq)} frames @ {eff:.2f}fps{rounded}, "
+          f"{frames[0].shape[1]}x{frames[0].shape[0]})")
 
     if debug:
         base = os.path.splitext(out)[0]

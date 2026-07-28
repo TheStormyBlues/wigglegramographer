@@ -1,4 +1,5 @@
 opencv-python>=4.8
 numpy>=1.24
-imageio>=2.31
 pillow>=10.0
+# imageio was dropped: GIF export goes straight through Pillow so the frame
+# delay and disposal method can be set explicitly. Add it back for MP4 / WebP.
