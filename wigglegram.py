@@ -466,15 +466,24 @@ def export_gif(seq, path, fps=8, max_height=600):
 
     Returns the effective fps, which the centisecond grid may round.
     """
-    frames = []
+    rgb = []
     for f in seq:
         if max_height and f.shape[0] > max_height:
             s = max_height / f.shape[0]
             f = cv2.resize(f, (int(f.shape[1] * s), max_height), interpolation=cv2.INTER_AREA)
-        frames.append(Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)))
+        rgb.append(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
+
+    # One palette for the whole animation. Quantising each frame independently
+    # gives every frame its own colour table, and those tables drift: measured
+    # at up to 164/255 channel difference between consecutive frames, which
+    # makes flat areas crawl even where the picture is identical. Deriving one
+    # table from all frames costs ~2KB and holds the colours still.
+    base = Image.fromarray(np.vstack(rgb)).convert("P", palette=Image.ADAPTIVE,
+                                                   colors=256)
+    pal = [Image.fromarray(f).quantize(palette=base, dither=Image.FLOYDSTEINBERG)
+           for f in rgb]
 
     cs = max(2, int(round(100.0 / fps)))
-    pal = [f.convert("P", palette=Image.ADAPTIVE, colors=256) for f in frames]
     pal[0].save(path, save_all=True, append_images=pal[1:], duration=cs * 10,
                 loop=0, disposal=1, optimize=False)
     return 100.0 / cs

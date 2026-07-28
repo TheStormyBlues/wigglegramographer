@@ -130,6 +130,12 @@ loop block. Note that the format stores delay in hundredths of a second, so the
 frame rate is rounded to that grid — `--fps 8` really plays at 8.33, and anything
 above 50 is capped. The run prints the effective rate.
 
+**Colours shimmer between frames** — shouldn't happen here, but worth knowing why.
+A GIF frame can carry its own 256-colour table, and if each frame is quantised on
+its own those tables drift, so flat areas crawl even where the picture is identical.
+Wigglegramographer derives one palette from every frame and applies it to all of
+them, which holds the colours still for a couple of KB.
+
 ## Roadmap
 
 - **Phase 1 — MVP:** crop four frames → ping-pong GIF. ✅

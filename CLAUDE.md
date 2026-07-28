@@ -51,6 +51,12 @@ Key flags: `--align translation|euclidean|none`, `--anchor cx,cy,w,h` (fractions
   Delay is now quantised to centiseconds, floored at 2cs, with disposal set to
   do-not-dispose. `export_gif` returns the effective fps, since the centisecond grid
   rounds it (8fps becomes 8.33, and anything above 50fps clamps).
+- One palette is derived from all frames and applied to each, rather than letting
+  every frame quantise independently. Independent quantisation gave each frame its
+  own colour table drifting by up to 164/255 per channel between consecutive frames,
+  which makes flat areas crawl even where the picture is identical. Judge this by
+  comparing the colour tables themselves — frame count, local-table count and file
+  size all look unchanged, so they hide the problem.
 - `--repair-weak` (opt-in) replaces weak frames' shifts with a linear fit through
   the frames that did lock. The four lenses sit on a fixed pitch, so shift is
   linear in frame index for any one depth plane. Needs >= 2 good frames; with
