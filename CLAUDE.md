@@ -8,7 +8,13 @@ ingest scan → isolate central image band → split into 4 frames at the dark
 inter-frame gaps → align frames onto a subject anchor → ping-pong sequence → GIF.
 
 ## Layout
-- `wigglegram.py` — the whole tool (detection, cropping, alignment, export, CLI).
+- `wigglegram.py` — the engine and CLI (detection, cropping, alignment, export).
+- `ui.py` — local web UI, a client of the engine. Stdlib `http.server` plus one
+  embedded HTML page, no new dependencies. Deliberate break from the single-file
+  rule: the engine stays headless and testable, the UI imports it. Two stages
+  (Crop / Wiggle) covering the whole workflow: open, crop, anchor, tune, export.
+  `python ui.py` with no argument starts empty and takes a file from the page.
+- `tests/` — picker state machines and GIF conformance; see Tests below.
 - `samples/` — test scans (`_DSC5457`–`_DSC5472.jpg`, colour negative, person
   holding a black cat). `_DSC5466.jpg` is the cleanest reference asset.
   Note `samples/` and generated output are gitignored, so these are local-only.
@@ -18,9 +24,10 @@ inter-frame gaps → align frames onto a subject anchor → ping-pong sequence �
     pip install -r requirements.txt
     python wigglegram.py samples/_DSC5466.jpg --debug
 
-Key flags: `--align translation|euclidean|none`, `--anchor cx,cy,w,h` (fractions),
-`--pick-anchor`, `--band y0,y1`, `--cuts x0,...,xN`, `--repair-weak`, `--fps`,
-`--reverse`, `--no-pingpong`, `--frames`, `--debug`.
+Key flags: `--align translation|euclidean|none`, `--anchor-point cx,cy`,
+`--anchor cx,cy,w,h` (fractions), `--auto-anchor`, `--pick-anchor`, `--band y0,y1`,
+`--cuts x0,...,xN`, `--repair-weak`, `--fps`, `--reverse`, `--no-pingpong`,
+`--frames`, `--debug`.
 
 ## Current state
 - Phase 1 (crop → ping-pong GIF) and Phase 2 (anchor-based masked-ECC alignment)
@@ -57,6 +64,29 @@ Key flags: `--align translation|euclidean|none`, `--anchor cx,cy,w,h` (fractions
   which makes flat areas crawl even where the picture is identical. Judge this by
   comparing the colour tables themselves — frame count, local-table count and file
   size all look unchanged, so they hide the problem.
+- ECC is **seeded from the parallax field** by default. It is a local optimiser and
+  was starting from the identity — "no shift at all" — while real shifts here run
+  past 100px. `flow_field()` computes dense flow once (~0.4s) and `_region_seeds()`
+  turns it into a starting guess. Across the roll this took weak frames 12 -> 10
+  with no scan worse, and fixed `_DSC5460` outright (min cc 0.475 -> 0.866), which
+  had needed a hand-picked anchor since the first batch. 11 of 16 scans are now
+  clean with the default anchor. Pass `flow=` to `align_frames` to reuse a field
+  already computed rather than paying for it twice.
+- `--anchor-point cx,cy` anchors on a point instead of a box. `region_from_point()`
+  grows a region outward while parallax stays close to the clicked point's, so it
+  follows the subject and stops at its silhouette; a rectangle straddles depth
+  planes and asks ECC to satisfy two motions at once. Masked ECC already accepted
+  arbitrary masks, so this needed no change to the alignment core — the box was
+  only ever one way of filling a mask in.
+- **Unresolved: `_REGION_MIN` is probably too low.** Measured against the box with a
+  blind centre point, point regions came out *worse* overall (14 weak vs 12), and
+  the split tracks size almost exactly — every scan that regressed had a region
+  under 3%, every one that improved was 6%+. The box covers ~25% of the frame, so a
+  2% floor drops ECC from a quarter of the image to a fortieth. Raising the floor is
+  the obvious fix but was still being measured when this was written. Note the
+  comparison used a fixed centre point, which is pessimistic versus a deliberate
+  click: on `_DSC5472` with a point on the subject, the region beat the box 1 weak
+  frame to 3.
 - `--auto-anchor` (opt-in) ranks candidate boxes by the smaller eigenvalue of the
   structure tensor — the quantity that governs how well-constrained a translation
   estimate is, so a region of purely horizontal edges scores low despite high
@@ -97,6 +127,44 @@ Key flags: `--align translation|euclidean|none`, `--anchor cx,cy,w,h` (fractions
 - Reading `--debug` shifts: frame 1 is the ECC reference and translation mode
   mean-centres the set, so frame 1's printed `dx` is `-mean`, not a measurement.
   A healthy scan ramps monotonically from `-X` to `+X` and sums to zero.
+
+## UI notes
+- The realtime anchor preview exists because ECC costs **~30s per anchor** at full
+  resolution — measured, not estimated. Interactive selection through ECC is not
+  possible, so `ui.py` precomputes the dense parallax field once (~0.4s) and every
+  anchor's shift becomes a box average over that field. The field is shipped to the
+  browser as a coarse grid, so dragging costs no server round-trip.
+- The preview is deliberately approximate: box-mean flow tracks ECC to a median of
+  ~9px at full resolution on well-locked frames, which is ~2px at display scale.
+  Export re-runs real ECC. Where they disagree badly it is usually ECC that is
+  wrong — on `_DSC5460` ECC reports dx=-46 where flow says +104, and that frame is
+  a known failed lock.
+- The depth overlay is flow magnitude, since parallax is a proxy for distance. It
+  is the visual answer to the `--auto-anchor` background problem: you can see which
+  regions are foreground before choosing one.
+- Endpoints: `GET /api/scanview[?force=1]` (crop stage; `force` re-runs detection),
+  `POST /api/upload` (raw body + `X-Filename`, avoids multipart parsing),
+  `POST /api/open` (server-side path), `POST /api/prepare` (band/cuts -> frames and
+  parallax field), `POST /api/export`. Server-side `STATE` holds path/band/cuts, so
+  export always uses exactly the crop the page is showing.
+- Both stages draw onto a **single** canvas — the frame and its overlay share one
+  surface. An earlier version used a second canvas positioned over the first, which
+  gave two bugs: it inherited `background:#000` from the shared `canvas` selector
+  and hid the preview entirely, then once transparent its `inset:0` box did not
+  match the rescaled canvas underneath and left dead space around the picture.
+- Point fractions are in *frame* coordinates but the wiggle canvas shows the frame
+  minus the alignment margins, so `toCanvas`/`toFrame` convert. Skipping that puts
+  the marker a few percent away from what is actually being measured.
+- The anchor mask highlights the region itself (bright edge, faint fill) rather than
+  dimming everything around it. The region is a few percent of the frame, so tinting
+  the remainder washed out most of the picture. Toggle with the button or **M**.
+- The browser grows the region on the coarse grid with the same tolerance ladder as
+  `region_from_point()`, so preview and export agree on the mask.
+- **Preview and export still use different algorithms** — the preview averages flow,
+  export runs ECC. Seeding narrowed the gap (export now starts where the preview
+  says and refines) but a scan where ECC fails outright can still diverge from what
+  the page showed. The page does not yet report post-export `cc`, so it can imply a
+  result the exporter did not deliver.
 
 ## Tests
     python tests/test_pickers.py     # picker state machines + coordinate maths

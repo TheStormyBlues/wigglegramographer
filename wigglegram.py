@@ -174,14 +174,129 @@ def _anchor_mask(H, W, anchor):
     return m, (ax0, ay0, ax1, ay1)
 
 
-def _estimate_warps(frames, anchor, mode="translation", ref_index=0):
+_FLOW_H = 700              # resolution the parallax field is computed at
+_REGION_MIN = 0.02         # region must cover at least this fraction of the frame
+_REGION_MAX = 0.35         # ...and no more than this
+_TOLERANCES = (0.3, 0.45, 0.65, 0.9, 1.3, 1.8, 2.5, 3.5, 5.0, 7.0)
+
+
+def flow_field(frames, ref_index=0, height=_FLOW_H):
+    """Dense optical flow from the reference frame to every frame.
+
+    Returns (flows, scale): flows are at `height` resolution, scale converts
+    preview pixels to full-resolution pixels. Computed once, then reused --
+    this is what makes interactive anchor selection possible at all, since ECC
+    costs ~30s per anchor at full resolution.
+    """
+    src = frames[ref_index]
+    scale = min(1.0, height / src.shape[0])
+    small = [cv2.cvtColor(cv2.resize(f, (max(1, int(f.shape[1] * scale)),
+                                         max(1, int(f.shape[0] * scale))),
+                                     interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+             for f in frames]
+    ref = small[ref_index]
+    flows = []
+    for i, g in enumerate(small):
+        if i == ref_index:
+            flows.append(np.zeros(ref.shape + (2,), np.float32))
+        else:
+            flows.append(cv2.calcOpticalFlowFarneback(ref, g, None,
+                                                      0.5, 4, 25, 3, 7, 1.5, 0))
+    return flows, scale
+
+
+def region_from_point(flows, point, shape):
+    """Grow a depth-consistent region around a clicked point.
+
+    Parallax magnitude is a proxy for distance, so pixels that move like the
+    clicked point sit at the same depth. Growing by flow similarity gives a
+    region that follows the subject and stops at its silhouette, where a
+    rectangle would straddle two depth planes and ask ECC to satisfy two
+    contradictory motions at once.
+
+    The tolerance widens until the region lands in a usable size band: too small
+    and ECC has nothing to lock onto, too large and it spans the whole scene.
+    Returns (mask at `shape`, info dict).
+    """
+    H, W = shape
+    fh, fw = flows[0].shape[:2]
+    sx = min(fw - 1, max(0, int(point[0] * fw)))
+    sy = min(fh - 1, max(0, int(point[1] * fh)))
+
+    # Distance from the seed's motion, taken as the worst disagreement across
+    # all frames so the region is consistent for the whole sequence.
+    dist = np.zeros((fh, fw), np.float32)
+    for fl in flows:
+        d = fl - fl[sy, sx]
+        dist = np.maximum(dist, np.sqrt(d[..., 0] ** 2 + d[..., 1] ** 2))
+
+    total = fh * fw
+    best = None
+    for tol in _TOLERANCES:
+        num, lab = cv2.connectedComponents((dist < tol).astype(np.uint8))
+        if lab[sy, sx] == 0:
+            continue
+        comp = (lab == lab[sy, sx])
+        frac = comp.sum() / total
+        if frac > _REGION_MAX:
+            break
+        best = (comp, frac, tol)
+        if frac >= _REGION_MIN:
+            break
+
+    if best is None or best[1] < _REGION_MIN:
+        # Flat or ambiguous: fall back to a disc so there is always something
+        # to align on, and say so rather than silently using a bad region.
+        yy, xx = np.mgrid[0:fh, 0:fw]
+        r = 0.13 * max(fh, fw)
+        comp = ((xx - sx) ** 2 + (yy - sy) ** 2) < r * r
+        info = {"frac": float(comp.sum() / total), "tol": None, "how": "disc fallback"}
+    else:
+        comp, frac, tol = best
+        info = {"frac": float(frac), "tol": tol, "how": f"grown at tol {tol}"}
+
+    mask = cv2.resize(comp.astype(np.uint8) * 255, (W, H), interpolation=cv2.INTER_NEAREST)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    return mask, info
+
+
+def _region_seeds(flows, scale, mask=None, anchor=None):
+    """Per-frame (dx, dy) at full resolution, from a mean of the flow field.
+
+    Used to seed ECC. ECC is a local optimiser started from the identity, i.e.
+    from "no shift at all", while real shifts here run to 100px+; a rough but
+    global starting guess is exactly what it lacks.
+    """
+    fh, fw = flows[0].shape[:2]
+    if mask is not None:
+        m = cv2.resize(mask, (fw, fh), interpolation=cv2.INTER_NEAREST) > 0
+    else:
+        cx, cy, bw, bh = anchor
+        m = np.zeros((fh, fw), bool)
+        x0, x1 = int((cx - bw / 2) * fw), int((cx + bw / 2) * fw)
+        y0, y1 = int((cy - bh / 2) * fh), int((cy + bh / 2) * fh)
+        m[max(0, y0):max(1, y1), max(0, x0):max(1, x1)] = True
+    if not m.any():
+        m[:] = True
+    return [(float(fl[..., 0][m].mean()) / scale, float(fl[..., 1][m].mean()) / scale)
+            for fl in flows]
+
+
+def _estimate_warps(frames, anchor, mode="translation", ref_index=0, mask=None,
+                    seeds=None):
     """Masked-ECC shift estimate per frame. Returns (warps, ccs, box).
 
     Split out from align_frames so anchor selection can score a candidate
     without paying for the warping and cropping it may not end up using.
+    `mask` overrides the anchor box: ECC takes any binary mask, so a
+    depth-grown region drops straight in.
     """
     H, W = frames[0].shape[:2]
-    mask, box = _anchor_mask(H, W, anchor)
+    if mask is None:
+        mask, box = _anchor_mask(H, W, anchor)
+    else:
+        ys, xs = np.where(mask > 0)
+        box = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
     ref = cv2.cvtColor(frames[ref_index], cv2.COLOR_BGR2GRAY).astype(np.float32)
     mt = cv2.MOTION_TRANSLATION if mode == "translation" else cv2.MOTION_EUCLIDEAN
     crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 500, 1e-7)
@@ -191,6 +306,8 @@ def _estimate_warps(frames, anchor, mode="translation", ref_index=0):
         warp = np.eye(2, 3, dtype=np.float32)
         cc = 1.0
         if i != ref_index:
+            if seeds:
+                warp[0, 2], warp[1, 2] = seeds[i]
             g = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY).astype(np.float32)
             try:
                 cc, warp = cv2.findTransformECC(ref, g, warp, mt, crit, mask, 5)
@@ -267,8 +384,11 @@ def auto_anchor(frames, default_anchor=(0.5, 0.6, 0.45, 0.55), mode="translation
 
     Returns (anchor, ccs, source, tried).
     """
+    flows, fscale = flow_field(frames)      # computed once, reused per candidate
+
     def score(anchor):
-        _w, ccs, _b = _estimate_warps(frames, anchor, mode)
+        seeds = _region_seeds(flows, fscale, anchor=anchor)
+        _w, ccs, _b = _estimate_warps(frames, anchor, mode, seeds=seeds)
         return sum(1 for c in ccs if c < _MIN_CC), min(ccs), ccs
 
     weak, mincc, ccs = score(default_anchor)
@@ -288,7 +408,7 @@ def auto_anchor(frames, default_anchor=(0.5, 0.6, 0.45, 0.55), mode="translation
 
 
 def align_frames(frames, anchor=(0.5, 0.6, 0.45, 0.55), mode="translation",
-                 ref_index=0, repair=False):
+                 ref_index=0, repair=False, mask=None, flow=None, seed=True):
     """Register frames so the subject inside the anchor box stays fixed.
 
     Uses masked ECC so only the subject region drives the estimate (the busy
@@ -300,7 +420,11 @@ def align_frames(frames, anchor=(0.5, 0.6, 0.45, 0.55), mode="translation",
     shift is not trustworthy. Callers should surface it — a weak lock is the
     difference between a good wiggle and one frame flying off on its own.
     """
-    warps, ccs, box = _estimate_warps(frames, anchor, mode, ref_index)
+    seeds = None
+    if seed:
+        flows, fscale = flow or flow_field(frames, ref_index)
+        seeds = _region_seeds(flows, fscale, mask=mask, anchor=anchor)
+    warps, ccs, box = _estimate_warps(frames, anchor, mode, ref_index, mask, seeds)
     H, W = frames[0].shape[:2]
 
     if repair:
@@ -612,8 +736,8 @@ def save_debug(img, y0, y1, xranges, frames, box, base):
 # Main
 # ----------------------------------------------------------------------------
 def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
-                    anchor=(0.5, 0.6, 0.45, 0.55), pick=False, auto=False, band=None,
-                    cuts=None, repair=False, pingpong=True, reverse=False,
+                    anchor=(0.5, 0.6, 0.45, 0.55), point=None, pick=False, auto=False,
+                    band=None, cuts=None, repair=False, pingpong=True, reverse=False,
                     max_height=600, inset=0.01, debug=False):
     img = cv2.imread(path, cv2.IMREAD_COLOR)
     if img is None:
@@ -650,8 +774,21 @@ def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
     frames = normalize_sizes(crop_frames(img, y0, y1, xranges, inset=inset))
 
     box = None
+    amask = None
+    aflow = None
+    desc = f"anchor={anchor}"
     if align != "none":
-        if pick:
+        if point is not None:
+            aflow = flow_field(frames)
+            amask, info = region_from_point(aflow[0], point, frames[0].shape[:2])
+            desc = (f"point {point[0]:.3f},{point[1]:.3f}, region "
+                    f"{info['frac'] * 100:.1f}% of frame")
+            print(f"  anchor    : --anchor-point {point[0]:.3f},{point[1]:.3f} -> "
+                  f"{info['frac'] * 100:.1f}% of frame ({info['how']})")
+            if info["how"] == "disc fallback":
+                print( "              nothing depth-consistent there, so a plain disc was")
+                print( "              used. Try a point with more detail on the subject.")
+        elif pick:
             picked = pick_anchor(frames[0], anchor)
             if picked is None:
                 raise SystemExit("  anchor    : cancelled - nothing written")
@@ -662,10 +799,10 @@ def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
             print("  anchor    : %s after %d candidate(s), "
                   "--anchor %.3f,%.3f,%.3f,%.3f" % ((source, tried) + anchor))
         frames, box, shifts, ccs = align_frames(frames, anchor=anchor, mode=align,
-                                                repair=repair)
+                                                repair=repair, mask=amask, flow=aflow)
         n_good = sum(1 for cc in ccs if cc >= _MIN_CC)
         fixed = repair and n_good >= 2
-        print(f"  align     : {align}, anchor={anchor}")
+        print(f"  align     : {align}, {desc}")
         for i, ((dx, dy), cc) in enumerate(zip(shifts, ccs), 1):
             if cc >= _MIN_CC:
                 flag = ""
@@ -680,9 +817,9 @@ def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
                 print( "              Too few good frames to fit a repair line, so their")
                 print( "              measured shifts were kept as-is.")
             else:
-                print( "              Those frames will jump. Re-run with --pick-anchor and")
-                print( "              choose a smaller, high-contrast subject detail,")
-                print( "              or pass --repair-weak to infer them from the others.")
+                print( "              Those frames will jump. Try --anchor-point cx,cy on a")
+                print( "              detailed part of the subject, or --repair-weak to infer")
+                print( "              them from the frames that did lock.")
         frames = normalize_sizes(frames)
 
     seq = build_sequence(frames, pingpong=pingpong, reverse=reverse)
@@ -701,6 +838,13 @@ def _parse_anchor(s):
     v = [float(x) for x in s.split(",")]
     if len(v) != 4:
         raise argparse.ArgumentTypeError("anchor must be cx,cy,w,h (four fractions)")
+    return tuple(v)
+
+
+def _parse_point(s):
+    v = [float(x) for x in s.split(",")]
+    if len(v) != 2 or not all(0 <= x <= 1 for x in v):
+        raise argparse.ArgumentTypeError("anchor-point must be cx,cy fractions in 0-1")
     return tuple(v)
 
 
@@ -730,6 +874,9 @@ def main():
                     help="subject box as cx,cy,w,h fractions (default 0.5,0.6,0.45,0.55)")
     ap.add_argument("--pick-anchor", action="store_true",
                     help="interactive: adjust the crop, then drag the subject box")
+    ap.add_argument("--anchor-point", type=_parse_point,
+                    help="anchor on a point as cx,cy fractions; the region around it "
+                         "is grown automatically to match that point's depth")
     ap.add_argument("--auto-anchor", action="store_true",
                     help="pick the subject box automatically, verified by lock score")
     ap.add_argument("--band", type=_parse_band,
@@ -749,8 +896,9 @@ def main():
     out = args.output or (os.path.splitext(args.input)[0] + "_wiggle.gif")
     print(f"Wigglegramographer -> {args.input}")
     make_wigglegram(args.input, out, n_frames=args.frames, fps=args.fps, align=args.align,
-                    anchor=args.anchor, pick=args.pick_anchor, auto=args.auto_anchor,
-                    band=args.band, cuts=args.cuts, repair=args.repair_weak,
+                    anchor=args.anchor, point=args.anchor_point, pick=args.pick_anchor,
+                    auto=args.auto_anchor, band=args.band, cuts=args.cuts,
+                    repair=args.repair_weak,
                     pingpong=not args.no_pingpong, reverse=args.reverse,
                     max_height=args.max_height, inset=args.inset, debug=args.debug)
 

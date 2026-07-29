@@ -54,6 +54,7 @@ python wigglegram.py scan.jpg --fps 10 --reverse
 | Flag | What it does |
 | --- | --- |
 | `--align translation\|euclidean\|none` | Alignment mode. `translation` is the default; `euclidean` adds rotation and is experimental. |
+| `--anchor-point cx,cy` | Anchor on a point; the region around it is grown to match its depth. |
 | `--anchor cx,cy,w,h` | Subject box as fractions of the frame. |
 | `--pick-anchor` | Interactive: adjust the crop, then drag the subject box. |
 | `--auto-anchor` | Choose the subject box automatically, verified by lock score. |
@@ -85,6 +86,45 @@ anchor    : --anchor 0.489,0.556,0.420,0.444
 Paste those into a later run to reproduce the same result without the windows —
 handy for batch processing a roll once you've dialled one frame in.
 
+## Interactive UI
+
+```bash
+python ui.py                       # open a scan from the page
+python ui.py samples/_DSC5466.jpg  # or start with one loaded
+```
+
+Opens a local page (no dependencies beyond the ones already listed — it uses
+Python's built-in HTTP server) with the whole workflow in one place: open a scan,
+fix the crop, place the anchor, tune playback, export.
+
+**Crop tab** — the full scan with the detected band in green and the frame cuts
+in red. Drag any line; the frame-width readout turns amber then red as the cuts
+drift off the gaps, so you can see when they're wrong without exporting anything.
+Hit *Apply crop* to re-cut the frames.
+
+**Wiggle tab** — the animation loops continuously. Click whatever you want to hold
+still and it re-registers **instantly**. There's no box to size: the region around
+your point is grown to match that point's distance from the camera, so it follows
+the subject rather than straddling foreground and background. **M** shows or hides
+the region.
+
+That works because ECC costs about 30 seconds per anchor at full resolution, far
+too slow to explore interactively. Instead the parallax field between the frames
+is computed once with dense optical flow (~0.4s), after which the shift needed to
+lock any box is just the average flow inside it — arithmetic, not a search. The
+whole field is sent to the browser, so dragging involves no server round-trip at
+all. The preview is approximate; pressing **Export GIF** re-runs the real ECC
+alignment at full resolution.
+
+Two readouts come free from that same field:
+
+- **Lock confidence** — the smaller eigenvalue of the structure tensor over your
+  box, i.e. how well that region pins down a 2D shift. Low means the frame
+  probably won't register there.
+- **Depth overlay** — parallax magnitude is a direct proxy for distance, so this
+  false-colours the picture by how near things are. Useful because anchoring on
+  the background freezes the background and makes your subject wiggle instead.
+
 ## Automatic anchor selection
 
 `--auto-anchor` scores candidate boxes by how well they would constrain a shift —
@@ -114,10 +154,13 @@ background freezes while your subject wiggles. If the result looks inside-out, u
    band, whereas dark image content (a doorway, a shadow) has bright pixels above or
    below it in the same column. A mean cannot tell those apart, and the cuts end up
    slicing through the middle of the pictures.
-3. **Align** — a masked ECC registration estimates the shift that keeps the subject
-   inside the anchor box fixed; only that region drives the estimate, so the busy
-   background is ignored. Parallax means only the subject's depth plane aligns —
-   that's what creates the effect.
+3. **Align** — a masked ECC registration estimates the shift that keeps the anchored
+   region fixed; only that region drives the estimate, so the busy background is
+   ignored. ECC is a local optimiser, so it's seeded from a dense optical-flow
+   estimate rather than started from zero — real shifts here run past 100px, and
+   searching from "no shift at all" is how frames end up locking onto the wrong
+   thing. Parallax means only the anchored depth plane aligns — that's what creates
+   the effect.
 4. **Sequence & export** — frames play ping-pong (1→2→3→4→3→2) for a seamless loop,
    exported as a GIF.
 
