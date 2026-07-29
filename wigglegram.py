@@ -35,12 +35,23 @@ from PIL import Image
 # ----------------------------------------------------------------------------
 # Detection
 # ----------------------------------------------------------------------------
-def detect_band(gray, rel_thr=0.35):
-    """Vertical bounds of the image band, via a row-brightness profile.
-    The band is the largest contiguous run of rows above an adaptive threshold."""
-    row_mean = gray.mean(axis=1)
-    thr = row_mean.min() + rel_thr * (row_mean.max() - row_mean.min())
-    y0, y1 = _largest_run(row_mean > thr)
+def detect_band(gray, rel_thr=0.25, smooth=15):
+    """Vertical bounds of the image band, via a row-variance profile.
+
+    Each row is scored by its horizontal standard deviation, not its brightness.
+    Every row inside the band crosses three black inter-frame gaps and four
+    frames, so it has high variance regardless of how dark the scene is, while
+    rebate rows are near-uniform film base. Scoring by brightness let a dark
+    scene drag whole rows under the threshold, clipping the band and costing
+    some scans 30-50% of their height before anything downstream ran.
+
+    The band is the largest contiguous run of rows above an adaptive threshold.
+    """
+    row = gray.std(axis=1)
+    if smooth > 1:
+        row = np.convolve(row, np.ones(smooth) / smooth, mode="same")
+    thr = row.min() + rel_thr * (row.max() - row.min())
+    y0, y1 = _largest_run(row > thr)
     if y0 is None:
         raise RuntimeError("Could not locate the image band (row profile too flat).")
     return y0, y1

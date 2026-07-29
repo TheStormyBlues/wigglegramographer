@@ -100,8 +100,12 @@ MP4 / WebP export will need an encoder such as imageio-ffmpeg added back.
   score over the shift values when judging whether a frame really locked.
 
 ## Next step
-Make band detection as robust as gap detection. Row standard deviation is the
-candidate: every row inside the band crosses three black inter-frame gaps, so it has
-high horizontal variance regardless of how dark the scene is. Early testing recovers
-most of the height lost on dark scans, but it perturbs the scans that already work,
-so it needs validating across the whole roll before adoption.
+Band detection is now variance-based and the over-cropping is largely resolved, so
+the remaining automatic-detection problem is `_DSC5472`: 5.1% width spread even with
+a correct band. The candidate is a grid fit — autocorrelate the column profile to
+recover the frame pitch, then solve for the phase that puts the three gaps in the
+darkest columns. That makes frame widths even by construction rather than hoping
+three independently chosen gaps happen to be evenly spaced.
+
+After that, automatic subject detection is the last thing standing between a raw
+scan and a good wiggle without any manual input.

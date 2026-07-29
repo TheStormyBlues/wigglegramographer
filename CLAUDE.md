@@ -63,15 +63,15 @@ Key flags: `--align translation|euclidean|none`, `--anchor cx,cy,w,h` (fractions
   fewer it declines and keeps the measured values.
 
 ## Known rough edges
-- `detect_band` clips the top and bottom of dark scenes, because a dark row drops the
-  row mean below threshold. This, not the alignment crop, is what makes output look
-  over-cropped: the alignment intersection costs only 2-10% of area, while band
-  clipping costs `_DSC5472` 50% of its height, `_DSC5468` 35% and `_DSC5465` 30%
-  (against a ~2350px norm). Fix it per-scan with `--pick-anchor` or `--band`.
-  Row standard deviation is a promising automatic fix — every band row crosses three
-  black gaps, so it has high horizontal variance whatever the scene — and in testing
-  it took `_DSC5465` from 1650 to 2352px, `_DSC5468` to 1898 and `_DSC5472` to 1395.
-  Not yet adopted, since it also nudges the good scans and alignment is edge-sensitive.
+- `detect_band` now profiles rows by horizontal standard deviation at `rel_thr=0.25`,
+  not brightness. Every band row crosses three black gaps so its variance is high
+  whatever the scene, whereas a dark row drags the *mean* under the threshold and the
+  band gets clipped. That clipping, not the alignment crop, was the real source of
+  over-cropping: alignment intersection costs only 2-10% of area, while brightness
+  band detection cost `_DSC5465` 30% of its height, `_DSC5468` 35% and `_DSC5472` 50%.
+  Adopting variance took `_DSC5465` 1650 -> 2358px, `_DSC5468` 1532 -> 1920 and
+  `_DSC5472` 1162 -> 1646, with total weak-lock frames across the roll going 14 -> 12.
+  Thresholds of 0.35 and 0.45 were both worse; 0.45 breaks `_DSC5460` and `_DSC5462`.
 - `_DSC5460` needs a hand-picked anchor: the default box lands on blank floor, and its
   black cat is a featureless silhouette ECC cannot lock onto (frame 4 cc=0.47).
   `--anchor 0.60,0.40,0.30,0.30` (the white cat) gets every frame to cc >= 0.89.
@@ -84,11 +84,17 @@ Key flags: `--align translation|euclidean|none`, `--anchor cx,cy,w,h` (fractions
   mean-centres the set, so frame 1's printed `dx` is `-mean`, not a measurement.
   A healthy scan ramps monotonically from `-X` to `+X` and sums to zero.
 
+## Tests
+    python tests/test_pickers.py     # picker state machines + coordinate maths
+    python tests/validate_gif.py     # GIF89a conformance of outputs/*.gif
+Both exit non-zero on failure. `validate_gif.py` exists because a GIF can be badly
+broken while looking normal — see the export notes above.
+
 ## Next up (Phase 3)
-- Fix `_DSC5472`: band detection, not the cuts. Candidate is a grid fit — autocorrelate
-  the column profile for the frame pitch, then solve for the phase that puts the three
-  gaps in the darkest columns, making frame widths even by construction.
-- Adopt row-std band detection so the crop step is rarely needed (see rough edges).
+- Fix `_DSC5472`: still 5.1% width spread even with the taller band. Candidate is a
+  grid fit — autocorrelate the column profile for the frame pitch, then solve for the
+  phase that puts the three gaps in the darkest columns, making widths even by
+  construction.
 - Auto subject detection, so the anchor does not have to be picked by hand.
 - Optional local web UI (Gradio or Streamlit) for drag-and-drop + interactive anchor.
 - MP4 / WebP export alongside GIF.

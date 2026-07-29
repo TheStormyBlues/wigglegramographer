@@ -86,8 +86,11 @@ handy for batch processing a roll once you've dialled one frame in.
 
 ## How it works
 
-1. **Isolate the band** — a row-brightness profile finds the vertical bounds of the
-   frame band, excluding the dark sprocket and edge-text rows.
+1. **Isolate the band** — a row-*variance* profile finds the vertical bounds of the
+   frame band, excluding the sprocket and edge-text rows. Variance rather than
+   brightness, because every row inside the band crosses three black inter-frame
+   gaps and so has high horizontal variance however dark the scene is. Scoring by
+   brightness clipped the top and bottom off dark photos.
 2. **Split into frames** — a column profile locates the dark inter-frame gaps and
    cuts the band into individual frames. Each column is scored by its 90th
    percentile rather than its mean: a real gap is dark for the *full* height of the
@@ -117,10 +120,9 @@ with no internal detail. Re-run with `--pick-anchor` and choose a smaller,
 high-contrast detail such as a face or an eye. If you'd rather not re-pick,
 `--repair-weak` will infer the missing shift from the frames that did lock.
 
-**Output looks over-cropped** — band detection clips the top and bottom of dark
-scenes, because a dark row drags the row average below the detection threshold.
-Use `--pick-anchor` and drag the green band edges outward, or pass `--band y0,y1`
-directly.
+**Output looks over-cropped** — band detection should get this right on most scans,
+but if it clips the top or bottom, use `--pick-anchor` and drag the green band edges
+outward, or pass `--band y0,y1` directly.
 
 **The GIF won't animate on a phone** — GIF keeps its frame delay in a Graphic
 Control Extension, and a file without one plays at whatever speed the decoder
@@ -145,3 +147,15 @@ them, which holds the colours still for a couple of KB.
   MP4 / WebP export.
 
 See `docs/wigglegramographer-plan.md` for the full plan.
+
+## Tests
+
+```bash
+python tests/test_pickers.py     # picker state machines + coordinate maths
+python tests/validate_gif.py     # GIF89a conformance of outputs/*.gif
+```
+
+Both exit non-zero on failure. The picker tests stub the OpenCV window and feed
+synthetic mouse events, since the windows can't be driven by hand in a test. The
+GIF validator parses the byte stream rather than trusting a library, because a GIF
+can be badly malformed while still looking fine in a browser.
