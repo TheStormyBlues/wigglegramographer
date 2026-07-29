@@ -78,15 +78,21 @@ Key flags: `--align translation|euclidean|none`, `--anchor-point cx,cy`,
   planes and asks ECC to satisfy two motions at once. Masked ECC already accepted
   arbitrary masks, so this needed no change to the alignment core — the box was
   only ever one way of filling a mask in.
-- **Unresolved: `_REGION_MIN` is probably too low.** Measured against the box with a
-  blind centre point, point regions came out *worse* overall (14 weak vs 12), and
-  the split tracks size almost exactly — every scan that regressed had a region
-  under 3%, every one that improved was 6%+. The box covers ~25% of the frame, so a
-  2% floor drops ECC from a quarter of the image to a fortieth. Raising the floor is
-  the obvious fix but was still being measured when this was written. Note the
-  comparison used a fixed centre point, which is pessimistic versus a deliberate
-  click: on `_DSC5472` with a point on the subject, the region beat the box 1 weak
-  frame to 3.
+- **`_REGION_MIN = 0.02` is correct — do not raise it.** Measured *without* seeding,
+  point regions looked worse than the box (14 weak vs 12) and the damage tracked
+  region size, which pointed at the floor being too low. That reading was wrong: a
+  sweep with seeding on gives box=10, floor 0.02=10, floor 0.08=11, floor 0.15=11.
+  Small regions were failing because ECC searched from zero with few pixels, not
+  because they were small. Seeded, they are fine. Forcing regions *larger* brings
+  back the depth-mixing the point anchor exists to avoid — `_DSC5471` goes from 0
+  weak frames at a 7% region to 3 weak at 16%. Small and depth-consistent is the
+  right shape; it just needs a seeded optimiser.
+- Point regions and the box tie at 10 weak frames when the point is dropped blindly
+  at the frame centre, which is pessimistic — a deliberate click does better. On
+  `_DSC5472` with a point on the subject the region beat the box 1 weak frame to 3.
+- General lesson from that pair of experiments: measure a change *after* the other
+  fixes it interacts with, not before. Judged against unseeded ECC the region idea
+  looked like a regression worth reverting.
 - `--auto-anchor` (opt-in) ranks candidate boxes by the smaller eigenvalue of the
   structure tensor — the quantity that governs how well-constrained a translation
   estimate is, so a region of purely horizontal edges scores low despite high
