@@ -56,6 +56,7 @@ python wigglegram.py scan.jpg --fps 10 --reverse
 | `--align translation\|euclidean\|none` | Alignment mode. `translation` is the default; `euclidean` adds rotation and is experimental. |
 | `--anchor cx,cy,w,h` | Subject box as fractions of the frame. |
 | `--pick-anchor` | Interactive: adjust the crop, then drag the subject box. |
+| `--auto-anchor` | Choose the subject box automatically, verified by lock score. |
 | `--band y0,y1` | Override the detected image band, in pixels. |
 | `--cuts x0,...,xN` | Override the frame cut positions, in pixels. |
 | `--repair-weak` | Infer shifts for frames that fail to lock from the ones that did. |
@@ -83,6 +84,22 @@ anchor    : --anchor 0.489,0.556,0.420,0.444
 
 Paste those into a later run to reproduce the same result without the windows —
 handy for batch processing a roll once you've dialled one frame in.
+
+## Automatic anchor selection
+
+`--auto-anchor` scores candidate boxes by how well they would constrain a shift —
+specifically the smaller eigenvalue of the image structure tensor, so a region of
+purely horizontal edges scores low even though it looks contrasty, because it can't
+pin down vertical position. The best candidates are then verified against the real
+lock scores, and the default centre box competes as one of the candidates, so the
+result can only match or beat it. Across the sample roll this cut weak-locking
+frames from 12 to 7, and two thirds of scans need no search at all.
+
+One caveat: **a firmer lock is not always the right subject.** The anchor also
+decides which depth plane stays still, and the most sharply-detailed region in a
+photo is sometimes behind your subject rather than on it — lock that and the
+background freezes while your subject wiggles. If the result looks inside-out, use
+`--pick-anchor` and put the box on the subject yourself.
 
 ## How it works
 

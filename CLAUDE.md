@@ -57,6 +57,20 @@ Key flags: `--align translation|euclidean|none`, `--anchor cx,cy,w,h` (fractions
   which makes flat areas crawl even where the picture is identical. Judge this by
   comparing the colour tables themselves — frame count, local-table count and file
   size all look unchanged, so they hide the problem.
+- `--auto-anchor` (opt-in) ranks candidate boxes by the smaller eigenvalue of the
+  structure tensor — the quantity that governs how well-constrained a translation
+  estimate is, so a region of purely horizontal edges scores low despite high
+  contrast — then verifies candidates against the real ECC lock scores. The default
+  box is one of the candidates, so it can only match or beat it: measured across the
+  roll, weak frames go 12 -> 7 with no scan regressing, and 9 of 16 need no search.
+- **Known limit of `--auto-anchor`: a better lock is not the same as the right
+  subject.** The anchor also selects which depth plane freezes. On `_DSC5463` it
+  picks the drinking glasses behind the subject (cc 0.430 -> 0.791) which locks the
+  background and makes the *person* wiggle — backwards for a wigglegram. The centre
+  prior is not enough when the subject is off-centre. The promising fix is a depth
+  prior: parallax magnitude is a direct proxy for distance, so foreground regions
+  shift more between lenses. Prefer candidates that lock well *and* show large
+  shift, rather than lock quality alone. This is why the flag stays opt-in.
 - `--repair-weak` (opt-in) replaces weak frames' shifts with a linear fit through
   the frames that did lock. The four lenses sit on a fixed pitch, so shift is
   linear in frame index for any one depth plane. Needs >= 2 good frames; with
@@ -95,7 +109,8 @@ broken while looking normal — see the export notes above.
   grid fit — autocorrelate the column profile for the frame pitch, then solve for the
   phase that puts the three gaps in the darkest columns, making widths even by
   construction.
-- Auto subject detection, so the anchor does not have to be picked by hand.
+- Give `--auto-anchor` a depth prior so it prefers the foreground subject, not just
+  the firmest lock (see the `_DSC5463` case above), then consider making it default.
 - Optional local web UI (Gradio or Streamlit) for drag-and-drop + interactive anchor.
 - MP4 / WebP export alongside GIF.
 

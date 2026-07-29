@@ -172,6 +172,30 @@ check("no GUI keeps the detected crop",
       drive(crop, [([], ENTER)], fail_window=True) == (Y0, Y1, XR))
 
 # ---------------------------------------------------------------------------
+# Automatic anchor ranking
+# ---------------------------------------------------------------------------
+print("anchor ranking")
+flat = np.full((900, 700, 3), 128, np.uint8)
+textured = flat.copy()
+textured[300:500, 150:350] = np.random.randint(0, 255, (200, 200, 3), np.uint8)
+
+ranked = wg.rank_anchors(textured)
+check("ranking returns candidates", len(ranked) > 0, f"{len(ranked)} boxes")
+check("scores are sorted descending",
+      all(a[0] >= b[0] for a, b in zip(ranked, ranked[1:])))
+check("all candidates lie inside the frame",
+      all(0 <= cx - bw / 2 and cx + bw / 2 <= 1 and 0 <= cy - bh / 2 and cy + bh / 2 <= 1
+          for _s, (cx, cy, bw, bh) in ranked))
+
+# The textured patch sits left of centre and above middle; the top candidate
+# should be pulled towards it rather than sitting on flat grey.
+top = ranked[0][1]
+check("top candidate is drawn toward the textured region",
+      top[0] < 0.5 and top[1] < 0.6, f"chose cx={top[0]:.2f} cy={top[1]:.2f}")
+check("a flat frame yields no positive score",
+      max(s for s, _ in wg.rank_anchors(flat)) <= 1e-6)
+
+# ---------------------------------------------------------------------------
 print()
 if FAILURES:
     print(f"{len(FAILURES)} FAILED: {', '.join(FAILURES)}")

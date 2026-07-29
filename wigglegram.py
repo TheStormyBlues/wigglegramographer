@@ -174,18 +174,11 @@ def _anchor_mask(H, W, anchor):
     return m, (ax0, ay0, ax1, ay1)
 
 
-def align_frames(frames, anchor=(0.5, 0.6, 0.45, 0.55), mode="translation",
-                 ref_index=0, repair=False):
-    """Register frames so the subject inside the anchor box stays fixed.
+def _estimate_warps(frames, anchor, mode="translation", ref_index=0):
+    """Masked-ECC shift estimate per frame. Returns (warps, ccs, box).
 
-    Uses masked ECC so only the subject region drives the estimate (the busy
-    background is ignored). For translation mode, the sequence is recentred on the
-    mean position to minimise edge cropping.
-
-    Returns (frames_cropped, box, shifts, ccs). `ccs` is the per-frame ECC
-    correlation score: ~0.85+ is a solid lock, below ~0.75 means that frame's
-    shift is not trustworthy. Callers should surface it — a weak lock is the
-    difference between a good wiggle and one frame flying off on its own.
+    Split out from align_frames so anchor selection can score a candidate
+    without paying for the warping and cropping it may not end up using.
     """
     H, W = frames[0].shape[:2]
     mask, box = _anchor_mask(H, W, anchor)
@@ -215,6 +208,100 @@ def align_frames(frames, anchor=(0.5, 0.6, 0.45, 0.55), mode="translation",
                 warp[0, 2], warp[1, 2] = dx, dy
         warps.append(warp)
         ccs.append(float(cc))
+    return warps, ccs, box
+
+
+def rank_anchors(frame, sizes=((0.30, 0.35), (0.40, 0.45), (0.25, 0.25)),
+                 steps=5, span=0.22, centre_sigma=0.28):
+    """Rank candidate anchor boxes by how well they would constrain a shift.
+
+    ECC solving for a translation is a least-squares problem whose conditioning
+    is set by the structure tensor [[sum Ix^2, sum IxIy], [sum IxIy, sum Iy^2]]
+    over the anchor region. Its *smaller* eigenvalue is what matters: a region
+    full of horizontal edges has plenty of contrast but cannot pin down vertical
+    position, and a generic "busyness" score would rate it highly anyway.
+    Integral images make the whole candidate grid cheap.
+
+    A centre prior is applied because the anchor also picks which depth plane
+    stays fixed. The most textured region on the film is often background
+    clutter, and locking onto the background is not what a wigglegram wants.
+    """
+    H, W = frame.shape[:2]
+    g = cv2.GaussianBlur(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32),
+                         (5, 5), 0)
+    ix = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+    iy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+    sxx, syy, sxy = (cv2.integral(v) for v in (ix * ix, iy * iy, ix * iy))
+
+    def box_sum(s, x0, y0, x1, y1):
+        return s[y1, x1] - s[y0, x1] - s[y1, x0] + s[y0, x0]
+
+    out = []
+    for bw, bh in sizes:
+        for cx in np.linspace(0.5 - span, 0.5 + span, steps):
+            for cy in np.linspace(0.5 - span, 0.5 + span, steps):
+                x0, x1 = int((cx - bw / 2) * W), int((cx + bw / 2) * W)
+                y0, y1 = int((cy - bh / 2) * H), int((cy + bh / 2) * H)
+                if x0 < 0 or y0 < 0 or x1 > W or y1 > H:
+                    continue
+                area = (x1 - x0) * (y1 - y0)
+                a = box_sum(sxx, x0, y0, x1, y1) / area
+                d = box_sum(syy, x0, y0, x1, y1) / area
+                b = box_sum(sxy, x0, y0, x1, y1) / area
+                tr = a + d
+                lam = tr / 2 - np.sqrt(max(0.0, tr * tr / 4 - (a * d - b * b)))
+                dist2 = (cx - 0.5) ** 2 + (cy - 0.5) ** 2
+                prior = float(np.exp(-dist2 / (2 * centre_sigma ** 2)))
+                out.append((float(lam * prior), (float(cx), float(cy), bw, bh)))
+    out.sort(key=lambda t: -t[0])
+    return out
+
+
+def auto_anchor(frames, default_anchor=(0.5, 0.6, 0.45, 0.55), mode="translation",
+                max_tries=3):
+    """Pick an anchor automatically, verified against the ECC lock scores.
+
+    The default box is treated as one of the candidates rather than as the thing
+    being replaced, so this can only match or beat it. If the default already
+    locks every frame there is no search at all, which is the common case.
+
+    Returns (anchor, ccs, source, tried).
+    """
+    def score(anchor):
+        _w, ccs, _b = _estimate_warps(frames, anchor, mode)
+        return sum(1 for c in ccs if c < _MIN_CC), min(ccs), ccs
+
+    weak, mincc, ccs = score(default_anchor)
+    best = (weak, mincc, default_anchor, ccs, "default")
+    if weak == 0:
+        return best[2], best[3], best[4], 1
+
+    tried = 1
+    for _s, cand in rank_anchors(frames[0])[:max_tries]:
+        w, cc, cc_all = score(cand)
+        tried += 1
+        if (w, -cc) < (best[0], -best[1]):
+            best = (w, cc, cand, cc_all, "auto")
+        if w == 0:
+            break
+    return best[2], best[3], best[4], tried
+
+
+def align_frames(frames, anchor=(0.5, 0.6, 0.45, 0.55), mode="translation",
+                 ref_index=0, repair=False):
+    """Register frames so the subject inside the anchor box stays fixed.
+
+    Uses masked ECC so only the subject region drives the estimate (the busy
+    background is ignored). For translation mode, the sequence is recentred on the
+    mean position to minimise edge cropping.
+
+    Returns (frames_cropped, box, shifts, ccs). `ccs` is the per-frame ECC
+    correlation score: ~0.85+ is a solid lock, below ~0.75 means that frame's
+    shift is not trustworthy. Callers should surface it — a weak lock is the
+    difference between a good wiggle and one frame flying off on its own.
+    """
+    warps, ccs, box = _estimate_warps(frames, anchor, mode, ref_index)
+    H, W = frames[0].shape[:2]
 
     if repair:
         # The four lenses sit on a fixed horizontal pitch, so for any one depth
@@ -525,9 +612,9 @@ def save_debug(img, y0, y1, xranges, frames, box, base):
 # Main
 # ----------------------------------------------------------------------------
 def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
-                    anchor=(0.5, 0.6, 0.45, 0.55), pick=False, band=None, cuts=None,
-                    repair=False, pingpong=True, reverse=False, max_height=600,
-                    inset=0.01, debug=False):
+                    anchor=(0.5, 0.6, 0.45, 0.55), pick=False, auto=False, band=None,
+                    cuts=None, repair=False, pingpong=True, reverse=False,
+                    max_height=600, inset=0.01, debug=False):
     img = cv2.imread(path, cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(f"Could not read image: {path}")
@@ -570,6 +657,10 @@ def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
                 raise SystemExit("  anchor    : cancelled - nothing written")
             anchor = picked
             print("  anchor    : --anchor %.3f,%.3f,%.3f,%.3f" % anchor)
+        elif auto:
+            anchor, _ccs, source, tried = auto_anchor(frames, anchor, mode=align)
+            print("  anchor    : %s after %d candidate(s), "
+                  "--anchor %.3f,%.3f,%.3f,%.3f" % ((source, tried) + anchor))
         frames, box, shifts, ccs = align_frames(frames, anchor=anchor, mode=align,
                                                 repair=repair)
         n_good = sum(1 for cc in ccs if cc >= _MIN_CC)
@@ -639,6 +730,8 @@ def main():
                     help="subject box as cx,cy,w,h fractions (default 0.5,0.6,0.45,0.55)")
     ap.add_argument("--pick-anchor", action="store_true",
                     help="interactive: adjust the crop, then drag the subject box")
+    ap.add_argument("--auto-anchor", action="store_true",
+                    help="pick the subject box automatically, verified by lock score")
     ap.add_argument("--band", type=_parse_band,
                     help="override the band as y0,y1 in pixels")
     ap.add_argument("--cuts", type=_parse_cuts,
@@ -656,8 +749,8 @@ def main():
     out = args.output or (os.path.splitext(args.input)[0] + "_wiggle.gif")
     print(f"Wigglegramographer -> {args.input}")
     make_wigglegram(args.input, out, n_frames=args.frames, fps=args.fps, align=args.align,
-                    anchor=args.anchor, pick=args.pick_anchor, band=args.band,
-                    cuts=args.cuts, repair=args.repair_weak,
+                    anchor=args.anchor, pick=args.pick_anchor, auto=args.auto_anchor,
+                    band=args.band, cuts=args.cuts, repair=args.repair_weak,
                     pingpong=not args.no_pingpong, reverse=args.reverse,
                     max_height=args.max_height, inset=args.inset, debug=args.debug)
 
