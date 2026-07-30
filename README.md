@@ -125,6 +125,11 @@ Two readouts come free from that same field:
   false-colours the picture by how near things are. Useful because anchoring on
   the background freezes the background and makes your subject wiggle instead.
 
+After an export the page reports what actually happened: the real per-frame lock
+score under each thumbnail, and a plain verdict naming any frame that failed to
+register. The preview is a fast approximation, so this is how you find out whether
+the exporter delivered what it promised — rather than spotting a jump by eye.
+
 ## Automatic anchor selection
 
 `--auto-anchor` scores candidate boxes by how well they would constrain a shift —

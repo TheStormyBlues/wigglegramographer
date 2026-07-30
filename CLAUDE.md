@@ -169,8 +169,11 @@ Key flags: `--align translation|euclidean|none`, `--anchor-point cx,cy`,
 - **Preview and export still use different algorithms** — the preview averages flow,
   export runs ECC. Seeding narrowed the gap (export now starts where the preview
   says and refines) but a scan where ECC fails outright can still diverge from what
-  the page showed. The page does not yet report post-export `cc`, so it can imply a
-  result the exporter did not deliver.
+  the page showed. `make_wigglegram` therefore *returns* a summary (`ccs`, `weak`,
+  `shifts`, `spread`, effective fps, output size) and the page prints per-frame `cc`
+  under the filmstrip plus a verdict after every export. The preview is still a
+  prediction; this is the receipt. Note `cc` stays low on a repaired frame — the
+  score reports the measurement, `--repair-weak` only replaces the shift.
 
 ## Tests
     python tests/test_pickers.py     # picker state machines + coordinate maths

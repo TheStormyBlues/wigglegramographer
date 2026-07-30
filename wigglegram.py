@@ -776,6 +776,7 @@ def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
     box = None
     amask = None
     aflow = None
+    shifts, ccs = [], []
     desc = f"anchor={anchor}"
     if align != "none":
         if point is not None:
@@ -832,6 +833,17 @@ def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
         base = os.path.splitext(out)[0]
         save_debug(img, y0, y1, xranges, frames, box, base)
         print(f"  debug     : {base}_debug_detect.png, {base}_debug_frames.png")
+
+    # Report what actually happened, not what was asked for. Callers that are not
+    # a terminal (the UI) have no other way to learn that a frame failed to lock,
+    # which is how an export ends up disagreeing with a preview silently.
+    return {"out": out, "fps": eff, "frames": len(seq),
+            "size": [int(frames[0].shape[1]), int(frames[0].shape[0])],
+            "band": [int(y0), int(y1)], "spread": round(spread, 2),
+            "shifts": [[round(dx, 2), round(dy, 2)] for dx, dy in shifts] if shifts else [],
+            "ccs": [round(c, 3) for c in ccs] if ccs else [],
+            "weak": [i for i, c in enumerate(ccs, 1) if c < _MIN_CC] if ccs else [],
+            "repaired": bool(ccs) and repair and sum(1 for c in ccs if c >= _MIN_CC) >= 2}
 
 
 def _parse_anchor(s):

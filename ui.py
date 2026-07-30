@@ -206,7 +206,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not STATE["band"] or not STATE["cuts"]:
                     detect_crop()        # export must not depend on page-load order
                 print(f"\nexporting {out} ...")
-                make_wigglegram(
+                res = make_wigglegram(
                     STATE["path"], out, n_frames=STATE["n_frames"],
                     fps=req.get("fps", 8), align=req.get("align", "translation"),
                     point=tuple(req["point"]) if req.get("point") else None,
@@ -215,7 +215,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     cuts=STATE["cuts"], repair=req.get("repair", False),
                     pingpong=req.get("pingpong", True), reverse=req.get("reverse", False),
                     max_height=req.get("maxHeight", 600), inset=STATE["inset"])
-                return {"ok": True, "out": os.path.abspath(out)}
+                res["out"] = os.path.abspath(out)
+                res["ok"] = True
+                return res
             return self._json(ex)
 
         self._send(404, json.dumps({"error": "not found"}))
@@ -252,6 +254,11 @@ canvas{display:block;border-radius:4px;cursor:crosshair;background:#000;
 #strip .f{text-align:center;color:var(--dim);font-size:11px}
 #strip img{height:60px;border-radius:3px;display:block;border:2px solid transparent}
 #strip .on img{border-color:var(--accent)}
+#strip .cc{font-variant-numeric:tabular-nums;font-size:10px;color:var(--dim)}
+#strip .cc.good{color:var(--good)}
+#strip .cc.bad{color:var(--bad)}
+#result{font-size:12px;line-height:1.5}
+#result.bad{color:var(--warn)}
 aside{width:320px;border-left:1px solid var(--line);background:var(--panel);
       padding:14px;overflow:auto;display:flex;flex-direction:column;gap:16px}
 .sec h2{font-size:11px;text-transform:uppercase;letter-spacing:.09em;
@@ -339,6 +346,7 @@ button:disabled{opacity:.45;cursor:default}
       <div class="row"><label>repair weak frames</label><input type="checkbox" id="rp"></div>
       <div class="hint">Export re-runs the real ECC alignment at full resolution, so
         it takes a while and can differ slightly from this preview.</div>
+      <div id="result"></div>
     </div>
   </aside>
 </main>
@@ -375,7 +383,8 @@ async function doPrepare(body) {
     imgs = await Promise.all(D.frames.map(src => new Promise((res, rej) => {
       const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; })));
     $('#strip').innerHTML = imgs.map((im, k) =>
-      `<div class="f" id="f${k}"><img src="${im.src}"><div>${k+1}</div></div>`).join('');
+      `<div class="f" id="f${k}"><img src="${im.src}"><div>${k+1}</div>` +
+      `<div class="cc" id="cc${k}">&nbsp;</div></div>`).join('');
     S.band = D.band; S.cuts = D.cuts; syncCropPanel();
     buildDepth(); update(); setMode('wiggle'); msg('');
     $('#export').disabled = false;
@@ -684,14 +693,39 @@ addEventListener('keydown', e => {          // quick peek without leaving the mo
 
 $('#export').onclick = async () => {
   const b = $('#export'); b.disabled = true; msg('rendering at full resolution…');
+  $('#result').textContent = ''; $('#result').className = '';
   try {
     const r = await api('/api/export', {method:'POST', body: JSON.stringify({
       point: [point.x, point.y], fps: +$('#fps').value,
       pingpong: $('#pp').checked, reverse: $('#rev').checked,
       maxHeight: +$('#mh').value, repair: $('#rp').checked})});
+    showResult(r);
     msg('wrote ' + r.out);
   } catch (e) { msg(e.message); } finally { b.disabled = false; }
 };
+
+// Report what the exporter actually achieved. The preview averages flow while
+// export runs ECC, so a frame can fail to lock even when the preview looked
+// fine -- without this the page quietly implies a result it did not deliver.
+function showResult(r) {
+  (r.ccs || []).forEach((cc, k) => {
+    const el = $('#cc' + k); if (!el) return;
+    el.textContent = 'cc ' + cc.toFixed(2);
+    el.className = 'cc ' + (cc >= 0.8 ? 'good' : 'bad');
+  });
+  const el = $('#result');
+  const px = r.size ? r.size.join('×') : '';
+  if (r.weak && r.weak.length) {
+    el.className = 'bad';
+    el.innerHTML = `<b>Frame ${r.weak.join(', ')} did not lock</b> (cc below 0.80)` +
+      (r.repaired ? ', so its shift was inferred from the frames that did.'
+                  : '. That frame will jump — try clicking somewhere with more ' +
+                    'detail, or tick “repair weak frames”.');
+  } else {
+    el.className = '';
+    el.textContent = `All ${r.ccs.length} frames locked. ${px} at ${r.fps.toFixed(2)}fps.`;
+  }
+}
 
 requestAnimationFrame(loop);
 boot().catch(e => msg(e.message));
