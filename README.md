@@ -60,6 +60,7 @@ python wigglegram.py scan.jpg --fps 10 --reverse
 | `--auto-anchor` | Choose the subject box automatically, verified by lock score. |
 | `--band y0,y1` | Override the detected image band, in pixels. |
 | `--cuts x0,...,xN` | Override the frame cut positions, in pixels. |
+| `--stabilize K` | Fraction of the measured shift to apply. 1.0 pins the subject, less is looser, more overshoots. |
 | `--nudge dx,dy,...` | Hand offsets per frame in pixels, on top of the measured alignment. |
 | `--repair-weak` | Infer shifts for frames that fail to lock from the ones that did. |
 | `--frames N` | Number of frames on the scan (default 4). |
@@ -95,19 +96,27 @@ python ui.py samples/_DSC5466.jpg  # or start with one loaded
 ```
 
 Opens a local page (no dependencies beyond the ones already listed — it uses
-Python's built-in HTTP server) with the whole workflow in one place: open a scan,
-fix the crop, place the anchor, tune playback, export.
+Python's built-in HTTP server) that walks the whole job in four steps, with a
+live health readout on each so you can see at a glance where a scan stands.
 
-**Crop tab** — the full scan with the detected band in green and the frame cuts
-in red. Drag any line; the frame-width readout turns amber then red as the cuts
-drift off the gaps, so you can see when they're wrong without exporting anything.
-Hit *Apply crop* to re-cut the frames.
+**① Crop** — the full scan, band in green and frame cuts in red. Drag any line;
+the frame-width readout turns amber then red as the cuts drift off the gaps, so
+you can tell they're wrong without exporting anything.
 
-**Wiggle tab** — the animation loops continuously. Click whatever you want to hold
-still and it re-registers **instantly**. There's no box to size: the region around
-your point is grown to match that point's distance from the camera, so it follows
-the subject rather than straddling foreground and background. **M** shows or hides
-the region.
+**② Anchor** — the animation loops while you click whatever should hold still,
+re-registering **instantly**. There's no box to size: the region around your point
+is grown to match its distance from the camera, so it follows the subject rather
+than straddling foreground and background. **Stabilise** sets how much of the
+measured shift to apply — under 100% leaves some drift for a looser wiggle, over
+100% overshoots for a punchier one.
+
+**③ Tune** — correct any frame the alignment got wrong; see *Fine tune* below.
+
+**④ Export** — full-resolution render, with the real per-frame result reported back.
+
+Playback lives in a transport bar under the viewer, and the filmstrip shows each
+frame's state — which is playing, which is selected, and either its hand offset or
+its lock score from the last export. Press **?** for the shortcut list.
 
 That works because ECC costs about 30 seconds per anchor at full resolution, far
 too slow to explore interactively. Instead the parallax field between the frames

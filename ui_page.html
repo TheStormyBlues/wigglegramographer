@@ -1,0 +1,714 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Wigglegramographer</title>
+<style>
+:root{
+  --bg:#15171c; --panel:#1c1f26; --sunk:#12141a; --line:#2b2f39;
+  --fg:#e7e9ee; --dim:#8a909d; --faint:#5d636f;
+  --accent:#6ea8fe; --good:#5fd08a; --warn:#e8b750; --bad:#e06c6c;
+  --s:8px;
+}
+*{box-sizing:border-box}
+body{margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;
+     font:14px/1.45 ui-sans-serif,system-ui,"Segoe UI",sans-serif;
+     background:var(--bg);color:var(--fg)}
+button{font:inherit;background:#262b34;color:var(--fg);border:1px solid var(--line);
+       border-radius:6px;padding:6px 11px;cursor:pointer}
+button:hover:not(:disabled){border-color:var(--accent)}
+button:disabled{opacity:.4;cursor:default}
+button.pri{background:var(--accent);border-color:var(--accent);color:#0e1117;font-weight:600}
+input[type=range]{accent-color:var(--accent);width:120px}
+input[type=text]{background:var(--sunk);border:1px solid var(--line);color:var(--fg);
+                 border-radius:6px;padding:7px 9px;width:100%}
+.hide{display:none!important}
+.sp{flex:1}
+.val{font-variant-numeric:tabular-nums}
+
+/* ---- header ---- */
+header{display:flex;align-items:center;gap:var(--s);padding:9px 14px;
+       background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+header h1{margin:0;font-size:13px;font-weight:600;letter-spacing:.02em}
+header h1 span{color:var(--accent)}
+.file{color:var(--dim);font-size:13px;max-width:260px;white-space:nowrap;
+      overflow:hidden;text-overflow:ellipsis}
+#msg{color:var(--dim);font-size:12px}
+#help{width:28px;padding:6px 0;text-align:center;color:var(--dim)}
+
+/* ---- step rail ---- */
+#rail{display:flex;gap:2px;padding:6px 14px;background:var(--sunk);
+      border-bottom:1px solid var(--line);flex:none}
+.stepbtn{display:flex;align-items:center;gap:7px;background:none;border:0;
+         border-radius:6px;padding:6px 12px;color:var(--dim);cursor:pointer}
+.stepbtn:hover:not(:disabled){background:#20242d;border-color:transparent}
+.stepbtn b{display:grid;place-items:center;width:18px;height:18px;border-radius:50%;
+           background:#2b313c;color:var(--dim);font-size:11px;font-weight:700}
+.stepbtn.on{background:#232833;color:var(--fg)}
+.stepbtn.on b{background:var(--accent);color:#0e1117}
+.stepbtn em{font-style:normal;font-size:11px;color:var(--faint);
+            font-variant-numeric:tabular-nums}
+.stepbtn em.good{color:var(--good)} .stepbtn em.warn{color:var(--warn)}
+.stepbtn em.bad{color:var(--bad)}
+.sep{align-self:center;color:var(--faint);font-size:11px}
+
+/* ---- layout ---- */
+main{flex:1;display:flex;min-height:0}
+#stage{flex:1;display:flex;flex-direction:column;align-items:center;
+       justify-content:center;gap:10px;padding:14px;min-width:0}
+#wrap{width:fit-content;position:relative;line-height:0}
+/* One canvas per stage: overlays draw onto the same surface as the image, so
+   there is no second element to keep aligned with a canvas that rescales. */
+canvas{display:block;border-radius:5px;background:#000;cursor:crosshair;
+        max-height:58vh;max-width:100%;width:auto;height:auto}
+
+#transport{display:flex;align-items:center;gap:14px;padding:6px 12px;
+           background:var(--panel);border:1px solid var(--line);border-radius:8px}
+#transport label{display:flex;align-items:center;gap:6px;color:var(--dim);font-size:12px}
+#play{width:34px;text-align:center;padding:5px 0}
+
+#strip{display:flex;gap:7px}
+#strip .f{text-align:center;cursor:pointer}
+#strip img{height:58px;display:block;border-radius:4px;border:2px solid transparent}
+#strip .on img{border-color:var(--accent)}
+#strip .sel img{outline:2px solid var(--warn);outline-offset:2px}
+#strip .n{font-size:11px;color:var(--dim);margin-top:3px}
+#strip .m{font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;
+          min-height:13px}
+#strip .m.good{color:var(--good)} #strip .m.bad{color:var(--bad)}
+#strip .m.nud{color:var(--warn)}
+
+aside{width:322px;flex:none;background:var(--panel);border-left:1px solid var(--line);
+      padding:14px;overflow:auto}
+aside h2{margin:0 0 3px;font-size:13px;font-weight:600}
+aside .lead{color:var(--dim);font-size:12px;margin:0 0 14px;line-height:1.5}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0}
+.row label{color:var(--dim)}
+.btns{display:flex;gap:6px;margin-top:12px}
+.meter{height:6px;border-radius:3px;background:#282d36;overflow:hidden;margin:2px 0 10px}
+.meter i{display:block;height:100%;background:var(--good);transition:width .08s}
+.note{color:var(--faint);font-size:12px;line-height:1.5;margin-top:12px;
+      padding-top:12px;border-top:1px solid var(--line)}
+kbd{background:#2b313c;border-radius:3px;padding:1px 5px;font:inherit;font-size:11px;
+    color:var(--fg)}
+.tag{padding:1px 8px;border-radius:99px;font-size:11px;background:#2b313c}
+.tag.good{background:rgba(95,208,138,.15);color:var(--good)}
+.tag.warn{background:rgba(232,183,80,.15);color:var(--warn)}
+.tag.bad{background:rgba(224,108,108,.15);color:var(--bad)}
+#result{font-size:12px;line-height:1.5;margin-top:12px}
+#result.bad{color:var(--warn)}
+
+#empty{text-align:center;color:var(--dim);max-width:420px}
+#empty h3{color:var(--fg);font-size:16px;margin:0 0 6px}
+
+#helpbox{position:fixed;inset:0;background:rgba(10,11,14,.72);display:grid;
+         place-items:center;z-index:20}
+#helpbox div{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+             padding:20px 24px;min-width:340px}
+#helpbox h3{margin:0 0 12px;font-size:14px}
+#helpbox dl{display:grid;grid-template-columns:auto 1fr;gap:7px 16px;margin:0}
+#helpbox dt{text-align:right}
+#helpbox dd{margin:0;color:var(--dim);font-size:13px}
+</style></head><body>
+
+<header>
+  <h1>Wigglegram<span>ographer</span></h1>
+  <span class="file" id="fname">no scan</span>
+  <button id="openBtn">Open…</button>
+  <input type="file" id="file" accept="image/*" class="hide">
+  <span class="sp"></span>
+  <span id="msg"></span>
+  <button id="help">?</button>
+</header>
+
+<nav id="rail">
+  <button class="stepbtn on" data-step="1"><b>1</b>Crop<em id="b1">—</em></button>
+  <span class="sep">›</span>
+  <button class="stepbtn" data-step="2"><b>2</b>Anchor<em id="b2">—</em></button>
+  <span class="sep">›</span>
+  <button class="stepbtn" data-step="3"><b>3</b>Tune<em id="b3">—</em></button>
+  <span class="sep">›</span>
+  <button class="stepbtn" data-step="4"><b>4</b>Export<em id="b4">—</em></button>
+</nav>
+
+<main>
+  <section id="stage">
+    <div id="empty">
+      <h3>Open a scan to start</h3>
+      <p>A flatbed sprocket scan of a four-frame 3D negative. You can also pass one
+         on the command line.</p>
+      <input type="text" id="pathIn" placeholder="…or paste a path and press Enter">
+    </div>
+    <div id="wrap" class="hide"><canvas id="cv"></canvas></div>
+    <div id="transport" class="hide">
+      <button id="play" title="Play / pause (Space)">‖</button>
+      <label>fps <input type="range" id="fps" min="2" max="24" step="1" value="8">
+        <span class="val" id="fpsv">8</span></label>
+      <label><input type="checkbox" id="pp" checked> ping-pong</label>
+      <label><input type="checkbox" id="rev"> reverse</label>
+    </div>
+    <div id="strip"></div>
+  </section>
+
+  <aside>
+    <!-- 1 ................................................................. -->
+    <div class="panel" id="p1">
+      <h2>Crop the scan</h2>
+      <p class="lead">Set the image band and the three cuts between frames.</p>
+      <div class="row"><label>band</label><span class="val" id="band">—</span></div>
+      <div class="row"><label>height</label><span class="val" id="bandh">—</span></div>
+      <div class="row"><label>frame widths</label><span class="tag" id="spread">—</span></div>
+      <div class="btns"><button id="apply" class="pri">Apply crop</button>
+        <button id="redetect">Re-detect</button></div>
+      <p class="note">Drag the green band edges or a red cut line. The frames sit on a
+        fixed mechanical pitch, so even widths mean the cuts found the gaps — anything
+        above 2% and they have probably missed.</p>
+    </div>
+
+    <!-- 2 ................................................................. -->
+    <div class="panel hide" id="p2">
+      <h2>Choose the anchor</h2>
+      <p class="lead">Click whatever should hold still.</p>
+      <div class="row"><label>lock confidence</label><span class="val" id="lockv">—</span></div>
+      <div class="meter"><i id="lock" style="width:0"></i></div>
+      <div class="row"><label>region size</label><span class="val" id="regv">—</span></div>
+      <div class="row"><label>parallax</label><span class="val" id="plx">—</span></div>
+      <div class="row"><label>stabilise</label>
+        <input type="range" id="stab" min="0" max="150" step="5" value="100">
+        <span class="val" id="stabv">100%</span></div>
+      <div class="btns"><button id="dep">Depth</button><button id="reg">Mask</button></div>
+      <p class="note">The region grows to match your point's distance from the camera,
+        so it follows the subject instead of straddling foreground and background.
+        <b>Stabilise</b> is how much of the measured shift to apply — under 100% keeps
+        some drift for a looser wiggle, over 100% overshoots for a punchier one.</p>
+    </div>
+
+    <!-- 3 ................................................................. -->
+    <div class="panel hide" id="p3">
+      <h2>Fine tune</h2>
+      <p class="lead">Correct any frame the alignment got wrong.</p>
+      <div class="row"><label>frame</label><span class="val" id="selv">—</span></div>
+      <div class="row"><label>offset</label><span class="val" id="nudv">0, 0 px</span></div>
+      <div class="btns"><button id="nudclr">Clear frame</button>
+        <button id="nudall">Clear all</button></div>
+      <p class="note">Pick a frame with <kbd>1</kbd>–<kbd>4</kbd> or the filmstrip, then
+        nudge with the <kbd>arrow</kbd> keys — <kbd>Shift</kbd> for bigger steps.
+        <kbd>Space</kbd> pauses so you can flip between two frames and line them up by
+        eye. Offsets carry into the export.</p>
+    </div>
+
+    <!-- 4 ................................................................. -->
+    <div class="panel hide" id="p4">
+      <h2>Export</h2>
+      <p class="lead">Re-runs the real alignment at full resolution.</p>
+      <div class="row"><label>height</label>
+        <input type="range" id="mh" min="300" max="1400" step="50" value="600">
+        <span class="val" id="mhv">600</span></div>
+      <div class="row"><label>repair weak frames</label><input type="checkbox" id="rp"></div>
+      <div class="btns"><button id="export" class="pri" disabled>Export GIF</button></div>
+      <div id="result"></div>
+      <p class="note">The preview averages optical flow; export runs full ECC. They
+        usually agree, so the per-frame scores below are the receipt — anything under
+        0.80 did not lock and will visibly jump.</p>
+    </div>
+  </aside>
+</main>
+
+<div id="helpbox" class="hide"><div>
+  <h3>Shortcuts</h3>
+  <dl>
+    <dt><kbd>Space</kbd></dt><dd>play / pause the loop</dd>
+    <dt><kbd>1</kbd>–<kbd>4</kbd></dt><dd>select a frame</dd>
+    <dt><kbd>← ↑ ↓ →</kbd></dt><dd>nudge the selected frame</dd>
+    <dt><kbd>Shift</kbd> + arrow</dt><dd>nudge in bigger steps</dd>
+    <dt><kbd>M</kbd></dt><dd>show / hide the anchor mask</dd>
+    <dt><kbd>D</kbd></dt><dd>show / hide the depth overlay</dd>
+    <dt><kbd>?</kbd></dt><dd>this list</dd>
+  </dl>
+</div></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const msg = t => $('#msg').textContent = t || '';
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+let step = 1, D = null, S = null, imgs = [], scanImg = null;
+let point = {x:.5, y:.6}, nudges = [], sel = 0;
+let shifts = [], padX = 0, padY = 0, region = null;
+let depthCanvas = null, regionCanvas = null;
+let showDepth = false, showRegion = true, paused = false, drag = null;
+let t0 = 0, seqStep = 0, cur = 0, lastExport = null;
+
+// ---------------------------------------------------------------- loading ---
+async function api(url, opts) {
+  const r = await fetch(url, opts); const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  return j;
+}
+async function boot() {
+  const j = await api('/api/scanview');
+  if (!j.empty) { gotScan(j); await doPrepare(); }
+  syncRail();
+}
+function gotScan(j) {
+  S = j; $('#fname').textContent = j.name;
+  scanImg = new Image();
+  scanImg.onload = () => { if (step === 1) render(); };
+  scanImg.src = j.img;
+  $('#empty').classList.add('hide'); $('#wrap').classList.remove('hide');
+  syncCrop();
+}
+async function doPrepare(body) {
+  msg('computing parallax field…'); $('#export').disabled = true;
+  try {
+    D = await api('/api/prepare', {method:'POST', body: JSON.stringify(body || {})});
+    imgs = await Promise.all(D.frames.map(src => new Promise((res, rej) => {
+      const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; })));
+    if (nudges.length !== imgs.length) nudges = imgs.map(() => [0, 0]);
+    buildStrip();
+    S.band = D.band; S.cuts = D.cuts; syncCrop();
+    buildDepth(); update(); setStep(2); msg('');
+    $('#export').disabled = false;
+  } catch (e) { msg(e.message); }
+}
+$('#openBtn').onclick = () => $('#file').click();
+$('#file').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  msg('uploading…');
+  try {
+    nudges = []; lastExport = null;
+    gotScan(await api('/api/upload', {method:'POST', body: f,
+      headers: {'X-Filename': f.name}}));
+    await doPrepare();
+  } catch (err) { msg(err.message); }
+};
+$('#pathIn').onkeydown = async e => {
+  if (e.key !== 'Enter' || !e.target.value.trim()) return;
+  msg('opening…');
+  try {
+    nudges = []; lastExport = null;
+    gotScan(await api('/api/open', {method:'POST',
+      body: JSON.stringify({path: e.target.value})}));
+    await doPrepare();
+  } catch (err) { msg(err.message); }
+};
+$('#redetect').onclick = async () => {
+  msg('re-detecting…');
+  try { gotScan(await api('/api/scanview?force=1')); await doPrepare(); }
+  catch (e) { msg(e.message); }
+};
+$('#apply').onclick = () => doPrepare({band: S.band, cuts: S.cuts});
+
+// ------------------------------------------------------------------ steps ---
+function setStep(n) {
+  if (n > 1 && !D) return;
+  step = n;
+  $$('.stepbtn').forEach(b => b.classList.toggle('on', +b.dataset.step === n));
+  $$('.panel').forEach((p, i) => p.classList.toggle('hide', i + 1 !== n));
+  $('#transport').classList.toggle('hide', n === 1 || !D);
+  $('#strip').classList.toggle('hide', n === 1 || !D);
+  render();
+}
+$$('.stepbtn').forEach(b => b.onclick = () => setStep(+b.dataset.step));
+
+function syncRail() {
+  const set = (id, text, cls) => {
+    const el = $(id); el.textContent = text; el.className = cls || '';
+  };
+  if (S) {
+    const sd = spreadOf(S.cuts);
+    set('#b1', sd.toFixed(1) + '%', sd < 1 ? 'good' : sd < 2 ? 'warn' : 'bad');
+  } else set('#b1', '—');
+
+  if (D && region) {
+    const l = lockScore();
+    set('#b2', l.toFixed(2), l > .55 ? 'good' : l > .3 ? 'warn' : 'bad');
+  } else set('#b2', '—');
+
+  const n = nudges.filter(v => v[0] || v[1]).length;
+  set('#b3', n ? n + ' adjusted' : '—', n ? 'warn' : '');
+
+  if (lastExport) {
+    const w = lastExport.weak || [];
+    set('#b4', w.length ? w.length + ' weak' : 'all locked',
+        w.length ? 'bad' : 'good');
+  } else set('#b4', '—');
+  $$('.stepbtn').forEach(b => b.disabled = +b.dataset.step > 1 && !D);
+}
+
+function spreadOf(cuts) {
+  const w = []; for (let i = 1; i < cuts.length; i++) w.push(cuts[i] - cuts[i-1]);
+  const m = w.reduce((a,b)=>a+b,0)/w.length;
+  return Math.sqrt(w.reduce((a,b)=>a+(b-m)*(b-m),0)/w.length) / m * 100;
+}
+function syncCrop() {
+  if (!S) return;
+  $('#band').textContent = S.band[0] + '–' + S.band[1];
+  $('#bandh').textContent = (S.band[1] - S.band[0]) + 'px';
+  const sd = spreadOf(S.cuts), t = $('#spread');
+  t.textContent = sd.toFixed(1) + '%';
+  t.className = 'tag ' + (sd < 1 ? 'good' : sd < 2 ? 'warn' : 'bad');
+  syncRail();
+}
+
+// ------------------------------------------------------- anchor + region ---
+// Mirrors region_from_point() in the engine: parallax is a proxy for distance,
+// so growing by flow similarity follows the subject and stops at its silhouette.
+const TOL = [0.3, 0.45, 0.65, 0.9, 1.3, 1.8, 2.5, 3.5, 5, 7];
+const R_MIN = 0.02, R_MAX = 0.35;
+
+function flood(dist, sx, sy, tol) {
+  const g = D.grid, seen = new Uint8Array(g.w * g.h);
+  if (dist[sy][sx] >= tol) return {mask: seen, count: 0};
+  const stack = [sy * g.w + sx]; seen[sy * g.w + sx] = 1;
+  let count = 1;
+  while (stack.length) {
+    const i = stack.pop(), x = i % g.w, y = (i - x) / g.w;
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= g.w || ny >= g.h) continue;
+      const j = ny * g.w + nx;
+      if (seen[j] || dist[ny][nx] >= tol) continue;
+      seen[j] = 1; count++; stack.push(j);
+    }
+  }
+  return {mask: seen, count};
+}
+function growRegion() {
+  const g = D.grid;
+  const sx = clamp(Math.floor(point.x * g.w), 0, g.w - 1);
+  const sy = clamp(Math.floor(point.y * g.h), 0, g.h - 1);
+  const seed = D.flows.map(fl => fl[sy][sx]);
+  const dist = [];
+  for (let y = 0; y < g.h; y++) {
+    const row = new Float32Array(g.w);
+    for (let x = 0; x < g.w; x++) {
+      let m = 0;
+      for (let k = 0; k < D.flows.length; k++) {
+        const a = D.flows[k][y][x][0] - seed[k][0];
+        const b = D.flows[k][y][x][1] - seed[k][1];
+        m = Math.max(m, Math.hypot(a, b));
+      }
+      row[x] = m;
+    }
+    dist.push(row);
+  }
+  const total = g.w * g.h;
+  let best = null;
+  for (const tol of TOL) {
+    const r = flood(dist, sx, sy, tol), frac = r.count / total;
+    if (frac > R_MAX) break;
+    best = {mask: r.mask, frac, how: 'grown'};
+    if (frac >= R_MIN) break;
+  }
+  if (!best || best.frac < R_MIN) {
+    const mask = new Uint8Array(total), r = 0.13 * Math.max(g.w, g.h);
+    let count = 0;
+    for (let y = 0; y < g.h; y++) for (let x = 0; x < g.w; x++)
+      if ((x-sx)*(x-sx) + (y-sy)*(y-sy) < r*r) { mask[y*g.w+x] = 1; count++; }
+    best = {mask, frac: count/total, how: 'disc'};
+  }
+  return best;
+}
+function lockScore() {
+  const g = D.grid, T = D.tensor, m = region.mask;
+  let a = 0, d = 0, b = 0, n = 0;
+  for (let y = 0; y < g.h; y++) for (let x = 0; x < g.w; x++)
+    if (m[y*g.w+x]) { a += T.xx[y][x]; d += T.yy[y][x]; b += T.xy[y][x]; n++; }
+  a /= n; d /= n; b /= n;
+  const tr = a + d;
+  const lam = tr/2 - Math.sqrt(Math.max(0, tr*tr/4 - (a*d - b*b)));
+  return clamp(Math.log10(1 + lam) / 4, 0, 1);
+}
+
+function update() {
+  if (!D) return;
+  const g = D.grid;
+  region = growRegion();
+  const m = region.mask, k = +$('#stab').value / 100;
+
+  shifts = [[0,0]]; let magSum = 0;
+  D.flows.forEach(fl => {
+    let sx = 0, sy = 0, n = 0;
+    for (let y = 0; y < g.h; y++) for (let x = 0; x < g.w; x++)
+      if (m[y*g.w+x]) { sx += fl[y][x][0]; sy += fl[y][x][1]; n++; }
+    sx /= n; sy /= n; magSum += Math.hypot(sx, sy);
+    shifts.push([sx, sy]);
+  });
+  const mx = shifts.reduce((a,s)=>a+s[0],0)/shifts.length;
+  const my = shifts.reduce((a,s)=>a+s[1],0)/shifts.length;
+  // Same order as the engine: recentre, scale by stabilise, then hand offsets.
+  // Nudges are in full-resolution pixels and negated to match the warp
+  // convention, where a positive translation moves content left.
+  shifts = shifts.map((s, i) => {
+    const nd = nudges[i] || [0, 0];
+    return [(s[0]-mx)*k - nd[0]*D.scale, (s[1]-my)*k - nd[1]*D.scale];
+  });
+
+  const l = lockScore();
+  $('#lock').style.width = (l*100) + '%';
+  $('#lock').style.background = l > .55 ? 'var(--good)' : l > .3 ? 'var(--warn)' : 'var(--bad)';
+  $('#lockv').textContent = l.toFixed(2);
+  $('#regv').textContent = (region.frac*100).toFixed(1) + '%' +
+    (region.how === 'disc' ? ' (no depth edge)' : '');
+  $('#plx').textContent = (magSum / D.flows.length / D.scale).toFixed(0) + 'px';
+
+  buildRegion();
+  padX = Math.ceil(Math.max(...shifts.map(s => Math.abs(s[0]))));
+  padY = Math.ceil(Math.max(...shifts.map(s => Math.abs(s[1]))));
+  syncTune(); syncRail(); render();
+}
+
+function buildDepth() {
+  const g = D.grid, c = document.createElement('canvas');
+  c.width = g.w; c.height = g.h;
+  const ctx = c.getContext('2d'), im = ctx.createImageData(g.w, g.h);
+  const last = D.flows[D.flows.length-1];
+  let mx = 1e-6;
+  for (let y=0;y<g.h;y++) for (let x=0;x<g.w;x++)
+    mx = Math.max(mx, Math.hypot(last[y][x][0], last[y][x][1]));
+  for (let y=0;y<g.h;y++) for (let x=0;x<g.w;x++) {
+    const t = Math.min(1, Math.hypot(last[y][x][0], last[y][x][1])/mx), i = (y*g.w+x)*4;
+    im.data[i]   = 255*Math.min(1, t*1.8);
+    im.data[i+1] = 255*Math.min(1, Math.max(0, t*1.6-.3));
+    im.data[i+2] = 255*Math.max(0, 1-t*1.8);
+    im.data[i+3] = 150;
+  }
+  ctx.putImageData(im, 0, 0); depthCanvas = c;
+}
+function buildRegion() {
+  // Mark the anchored region, not everything around it: the region is a few
+  // percent of the frame, so tinting the remainder washes out the picture.
+  const g = D.grid, c = document.createElement('canvas');
+  c.width = g.w; c.height = g.h;
+  const ctx = c.getContext('2d'), im = ctx.createImageData(g.w, g.h), m = region.mask;
+  for (let y = 0; y < g.h; y++) for (let x = 0; x < g.w; x++) {
+    const i = y*g.w + x, j = i*4;
+    if (!m[i]) { im.data[j+3] = 0; continue; }
+    const edge = (x === 0 || !m[i-1]) || (x === g.w-1 || !m[i+1]) ||
+                 (y === 0 || !m[i-g.w]) || (y === g.h-1 || !m[i+g.w]);
+    im.data[j] = 110; im.data[j+1] = 168; im.data[j+2] = 254;
+    im.data[j+3] = edge ? 185 : 45;
+  }
+  ctx.putImageData(im, 0, 0); regionCanvas = c;
+}
+
+// -------------------------------------------------------------- filmstrip ---
+function buildStrip() {
+  $('#strip').innerHTML = imgs.map((im, k) =>
+    `<div class="f"><img src="${im.src}"><div class="n">${k+1}</div>` +
+    `<div class="m" id="m${k}">&nbsp;</div></div>`).join('');
+}
+function syncTune() {
+  $('#selv').textContent = imgs.length ? (sel+1) + ' of ' + imgs.length : '—';
+  const nd = nudges[sel] || [0,0];
+  $('#nudv').textContent = `${nd[0].toFixed(0)}, ${nd[1].toFixed(0)} px`;
+  imgs.forEach((_, k) => {
+    const el = $('#m' + k); if (!el) return;
+    const cc = lastExport && lastExport.ccs ? lastExport.ccs[k] : null;
+    const n = nudges[k] || [0,0];
+    if (n[0] || n[1]) { el.textContent = `${n[0]>0?'+':''}${n[0]},${n[1]>0?'+':''}${n[1]}`;
+                        el.className = 'm nud'; }
+    else if (cc != null) { el.textContent = 'cc ' + cc.toFixed(2);
+                           el.className = 'm ' + (cc >= .8 ? 'good' : 'bad'); }
+    else { el.innerHTML = '&nbsp;'; el.className = 'm'; }
+  });
+}
+function selectFrame(i) {
+  if (!imgs.length) return;
+  sel = clamp(i, 0, imgs.length - 1);
+  if (paused) cur = sel;
+  syncTune(); render();
+}
+function nudge(dx, dy) {
+  if (!D || !nudges[sel]) return;
+  const stepPx = Math.max(1, Math.round(1 / D.scale));   // about one preview pixel
+  nudges[sel][0] += dx * stepPx; nudges[sel][1] += dy * stepPx;
+  update();
+}
+
+// -------------------------------------------------------------- rendering ---
+function order() {
+  let s = imgs.map((_, i) => i);
+  if ($('#rev').checked) s = s.reverse();
+  if ($('#pp').checked && s.length > 2) s = s.concat(s.slice(1,-1).reverse());
+  return s;
+}
+function loop(t) {
+  if (step > 1 && D && imgs.length && !paused) {
+    const seq = order(), ms = 1000 / (+$('#fps').value);
+    if (t - t0 > ms) { t0 = t; seqStep = (seqStep+1) % seq.length; cur = seq[seqStep]; render(); }
+  }
+  requestAnimationFrame(loop);
+}
+// The wiggle canvas shows the frame minus the alignment margins, so point
+// fractions (in FRAME coordinates) shift by that margin.
+function toCanvas(fx, fy) {
+  return [fx*D.w - padX - shifts[0][0], fy*D.h - padY - shifts[0][1]];
+}
+function toFrame(cx, cy) {
+  return [(cx + padX + shifts[0][0])/D.w, (cy + padY + shifts[0][1])/D.h];
+}
+function fit(cv, w, h) { if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; } }
+
+function render() {
+  if (!S) return;
+  const cv = $('#cv'), ctx = cv.getContext('2d');
+
+  if (step === 1) {
+    if (!scanImg || !scanImg.complete) return;
+    const w = scanImg.naturalWidth, h = scanImg.naturalHeight;
+    fit(cv, w, h); ctx.clearRect(0,0,w,h); ctx.drawImage(scanImg, 0, 0);
+    const y0 = S.band[0]*S.scale, y1 = S.band[1]*S.scale;
+    ctx.fillStyle = 'rgba(0,0,0,.55)';
+    ctx.fillRect(0,0,w,y0); ctx.fillRect(0,y1,w,h-y1);
+    ctx.lineWidth = 2; ctx.strokeStyle = '#5fd08a';
+    [y0,y1].forEach(y => { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); });
+    ctx.strokeStyle = '#e06c6c';
+    S.cuts.forEach(c => { const x = c*S.scale;
+      ctx.beginPath(); ctx.moveTo(x,y0); ctx.lineTo(x,y1); ctx.stroke(); });
+    return;
+  }
+  if (!D || !imgs.length || !shifts.length) return;
+
+  const w = Math.max(1, Math.round(D.w - 2*padX));
+  const h = Math.max(1, Math.round(D.h - 2*padY));
+  fit(cv, w, h);
+  const ox = -padX - shifts[cur][0], oy = -padY - shifts[cur][1];
+  ctx.clearRect(0,0,w,h);
+  ctx.drawImage(imgs[cur], ox, oy);
+  if (showDepth && depthCanvas) ctx.drawImage(depthCanvas, ox, oy, D.w, D.h);
+  // Overlays sit in the reference frame's position so they stay put while the
+  // frames cycle underneath — they mark what is being held still.
+  const rx = -padX - shifts[0][0], ry = -padY - shifts[0][1];
+  if (showRegion && regionCanvas && step === 2)
+    ctx.drawImage(regionCanvas, rx, ry, D.w, D.h);
+  if (step === 2) {
+    const [px, py] = toCanvas(point.x, point.y);
+    ctx.strokeStyle = '#6ea8fe'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px, py, 9, 0, 6.284); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(px-15,py); ctx.lineTo(px-4,py); ctx.moveTo(px+4,py); ctx.lineTo(px+15,py);
+    ctx.moveTo(px,py-15); ctx.lineTo(px,py-4); ctx.moveTo(px,py+4); ctx.lineTo(px,py+15);
+    ctx.stroke();
+  }
+  $$('#strip .f').forEach((e,k) =>
+    e.className = 'f' + (k === cur ? ' on' : '') + (k === sel ? ' sel' : ''));
+}
+
+// ---------------------------------------------------------------- pointer ---
+function rel(e) {
+  const cv = $('#cv'), r = cv.getBoundingClientRect();
+  return [(e.clientX-r.left)/r.width*cv.width, (e.clientY-r.top)/r.height*cv.height];
+}
+$('#cv').addEventListener('pointerdown', e => {
+  const [cx, cy] = rel(e);
+  if (step === 1) {
+    const cands = [['top', Math.abs(cy - S.band[0]*S.scale)],
+                   ['bot', Math.abs(cy - S.band[1]*S.scale)]];
+    S.cuts.forEach((c,i) => cands.push([i, Math.abs(cx - c*S.scale)]));
+    const best = cands.reduce((a,b) => b[1] < a[1] ? b : a);
+    if (best[1] <= 10) drag = {crop: best[0]};
+  } else if (step === 2 && D) {
+    const [u, v] = toFrame(cx, cy);
+    point = {x: clamp(u, 0, 1), y: clamp(v, 0, 1)};
+    drag = {point: true}; update();
+  }
+  if (drag) $('#cv').setPointerCapture(e.pointerId);
+});
+$('#cv').addEventListener('pointermove', e => {
+  if (!drag) return;
+  const [cx, cy] = rel(e);
+  if (drag.crop !== undefined) {
+    if (drag.crop === 'top')
+      S.band[0] = clamp(Math.round(cy/S.scale), 0, S.band[1]-20);
+    else if (drag.crop === 'bot')
+      S.band[1] = clamp(Math.round(cy/S.scale), S.band[0]+20, S.scanH);
+    else S.cuts[drag.crop] = clamp(Math.round(cx/S.scale), 0, S.scanW);
+    syncCrop(); render();
+  } else {
+    const [u, v] = toFrame(cx, cy);
+    point = {x: clamp(u, 0, 1), y: clamp(v, 0, 1)};
+    update();
+  }
+});
+addEventListener('pointerup', () => {
+  if (drag && drag.crop !== undefined) S.cuts.sort((a,b)=>a-b);
+  drag = null;
+});
+
+// -------------------------------------------------------------- transport ---
+function setPaused(p) {
+  paused = p; if (paused) cur = sel;
+  $('#play').textContent = paused ? '▶' : '‖';
+  render();
+}
+$('#play').onclick = () => setPaused(!paused);
+['fps','mh'].forEach(k => $('#'+k).oninput = () => $('#'+k+'v').textContent = $('#'+k).value);
+$('#stab').oninput = () => { $('#stabv').textContent = $('#stab').value + '%'; update(); };
+$('#strip').addEventListener('click', e => {
+  const f = e.target.closest('.f'); if (!f) return;
+  selectFrame($$('#strip .f').indexOf(f));
+});
+$('#nudclr').onclick = () => { if (nudges[sel]) { nudges[sel] = [0,0]; update(); } };
+$('#nudall').onclick = () => { nudges = nudges.map(() => [0,0]); update(); };
+
+function markToggle(el, on) {
+  el.style.borderColor = on ? 'var(--accent)' : 'var(--line)';
+  el.style.color = on ? 'var(--accent)' : 'var(--fg)';
+}
+$('#dep').onclick = () => { showDepth = !showDepth; markToggle($('#dep'), showDepth); render(); };
+$('#reg').onclick = () => { showRegion = !showRegion; markToggle($('#reg'), showRegion); render(); };
+markToggle($('#reg'), true);
+$('#help').onclick = () => $('#helpbox').classList.toggle('hide');
+$('#helpbox').onclick = () => $('#helpbox').classList.add('hide');
+
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const k = e.key, big = e.shiftKey ? 5 : 1;
+  if (k === '?') $('#helpbox').classList.toggle('hide');
+  else if (k === 'Escape') $('#helpbox').classList.add('hide');
+  else if (k === ' ') setPaused(!paused);
+  else if (k === 'm' || k === 'M') { showRegion = !showRegion; markToggle($('#reg'), showRegion); render(); }
+  else if (k === 'd' || k === 'D') { showDepth = !showDepth; markToggle($('#dep'), showDepth); render(); }
+  else if (k >= '1' && k <= '9') selectFrame(+k - 1);
+  else if (k === 'ArrowLeft')  nudge(-big, 0);
+  else if (k === 'ArrowRight') nudge(+big, 0);
+  else if (k === 'ArrowUp')    nudge(0, -big);
+  else if (k === 'ArrowDown')  nudge(0, +big);
+  else return;
+  e.preventDefault();
+});
+
+// ----------------------------------------------------------------- export ---
+$('#export').onclick = async () => {
+  const b = $('#export'); b.disabled = true;
+  msg('rendering at full resolution…');
+  $('#result').textContent = ''; $('#result').className = '';
+  try {
+    lastExport = await api('/api/export', {method:'POST', body: JSON.stringify({
+      point: [point.x, point.y], nudge: nudges,
+      stabilize: +$('#stab').value / 100, fps: +$('#fps').value,
+      pingpong: $('#pp').checked, reverse: $('#rev').checked,
+      maxHeight: +$('#mh').value, repair: $('#rp').checked})});
+    showResult(lastExport); msg('wrote ' + lastExport.out);
+  } catch (e) { msg(e.message); } finally { b.disabled = false; }
+};
+// Report what the exporter achieved. The preview averages flow while export runs
+// ECC, so a frame can fail to lock even when the preview looked steady.
+function showResult(r) {
+  const el = $('#result'), px = r.size ? r.size.join('×') : '';
+  if (r.weak && r.weak.length) {
+    el.className = 'bad';
+    el.innerHTML = `<b>Frame ${r.weak.join(', ')} did not lock.</b> ` + (r.repaired
+      ? 'Its shift was inferred from the frames that did.'
+      : 'It will jump — nudge it in step 3, pick a point with more detail, or ' +
+        'tick repair.');
+  } else {
+    el.className = '';
+    el.textContent = `All ${r.ccs.length} frames locked. ${px} at ${r.fps.toFixed(2)}fps.`;
+  }
+  syncTune(); syncRail();
+}
+
+requestAnimationFrame(loop);
+boot().catch(e => msg(e.message));
+</script></body></html>

@@ -409,7 +409,7 @@ def auto_anchor(frames, default_anchor=(0.5, 0.6, 0.45, 0.55), mode="translation
 
 def align_frames(frames, anchor=(0.5, 0.6, 0.45, 0.55), mode="translation",
                  ref_index=0, repair=False, mask=None, flow=None, seed=True,
-                 nudge=None):
+                 stabilize=1.0, nudge=None):
     """Register frames so the subject inside the anchor box stays fixed.
 
     Uses masked ECC so only the subject region drives the estimate (the busy
@@ -446,6 +446,16 @@ def align_frames(frames, anchor=(0.5, 0.6, 0.45, 0.55), mode="translation",
         for w in warps:
             w[0, 2] -= mean_t[0]
             w[1, 2] -= mean_t[1]
+
+    if stabilize != 1.0:
+        # How much of the measured shift to actually apply. 1.0 pins the anchored
+        # subject; below that it keeps some of its original drift, which reads as
+        # a looser, less pinned wiggle; above 1.0 overshoots, so the subject
+        # swings the other way and the effect gets punchier. We only have four
+        # real views, so this cannot invent parallax -- it redistributes it.
+        for w in warps:
+            w[0, 2] *= stabilize
+            w[1, 2] *= stabilize
 
     if nudge:
         # Hand corrections, in full-resolution pixels, as "move this frame's
@@ -749,8 +759,9 @@ def save_debug(img, y0, y1, xranges, frames, box, base):
 # ----------------------------------------------------------------------------
 def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
                     anchor=(0.5, 0.6, 0.45, 0.55), point=None, pick=False, auto=False,
-                    band=None, cuts=None, repair=False, nudge=None, pingpong=True,
-                    reverse=False, max_height=600, inset=0.01, debug=False):
+                    band=None, cuts=None, repair=False, stabilize=1.0, nudge=None,
+                    pingpong=True, reverse=False, max_height=600, inset=0.01,
+                    debug=False):
     img = cv2.imread(path, cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(f"Could not read image: {path}")
@@ -813,7 +824,9 @@ def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
                   "--anchor %.3f,%.3f,%.3f,%.3f" % ((source, tried) + anchor))
         frames, box, shifts, ccs = align_frames(frames, anchor=anchor, mode=align,
                                                 repair=repair, mask=amask, flow=aflow,
-                                                nudge=nudge)
+                                                stabilize=stabilize, nudge=nudge)
+        if stabilize != 1.0:
+            print(f"  stabilise : {stabilize * 100:.0f}% of the measured shift")
         if nudge and any(any(v) for v in nudge):
             print("  nudge     : --nudge " +
                   ",".join(f"{v:g}" for nd in nudge for v in nd))
@@ -918,6 +931,9 @@ def main():
                     help="override the band as y0,y1 in pixels")
     ap.add_argument("--cuts", type=_parse_cuts,
                     help="override the frame cuts as n_frames+1 pixel positions")
+    ap.add_argument("--stabilize", type=float, default=1.0, metavar="K",
+                    help="fraction of the measured shift to apply: 1.0 pins the "
+                         "subject, less is looser, more overshoots (default 1.0)")
     ap.add_argument("--nudge", type=_parse_nudge,
                     help="hand offsets as dx,dy per frame in pixels, e.g. 0,0,4,-2,0,0,0,0")
     ap.add_argument("--repair-weak", action="store_true",
@@ -935,7 +951,7 @@ def main():
     make_wigglegram(args.input, out, n_frames=args.frames, fps=args.fps, align=args.align,
                     anchor=args.anchor, point=args.anchor_point, pick=args.pick_anchor,
                     auto=args.auto_anchor, band=args.band, cuts=args.cuts,
-                    repair=args.repair_weak, nudge=args.nudge,
+                    repair=args.repair_weak, stabilize=args.stabilize, nudge=args.nudge,
                     pingpong=not args.no_pingpong, reverse=args.reverse,
                     max_height=args.max_height, inset=args.inset, debug=args.debug)
 

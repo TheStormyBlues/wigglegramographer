@@ -9,11 +9,16 @@ inter-frame gaps → align frames onto a subject anchor → ping-pong sequence �
 
 ## Layout
 - `wigglegram.py` — the engine and CLI (detection, cropping, alignment, export).
-- `ui.py` — local web UI, a client of the engine. Stdlib `http.server` plus one
-  embedded HTML page, no new dependencies. Deliberate break from the single-file
-  rule: the engine stays headless and testable, the UI imports it. Two stages
-  (Crop / Wiggle) covering the whole workflow: open, crop, anchor, tune, export.
-  `python ui.py` with no argument starts empty and takes a file from the page.
+- `ui.py` — local web UI server, a client of the engine. Stdlib `http.server`, no
+  new dependencies. Deliberate break from the single-file rule: the engine stays
+  headless and testable, the UI imports it. `python ui.py` with no argument starts
+  empty and takes a file from the page.
+- `ui_page.html` — the whole front end, read off disk per request so editing it only
+  needs a browser refresh, not a restart. It was an embedded Python string until it
+  outgrew that. Four steps in a rail — **Crop → Anchor → Tune → Export** — with the
+  inspector showing only the current step's controls. Tabs were wrong: these are
+  sequential pipeline stages, not alternate views, which is why the old two-tab
+  version had to show every panel at once and half of them did nothing.
 - `tests/` — picker state machines and GIF conformance; see Tests below.
 - `samples/` — test scans (`_DSC5457`–`_DSC5472.jpg`, colour negative, person
   holding a black cat). `_DSC5466.jpg` is the cleanest reference asset.
@@ -145,6 +150,19 @@ Key flags: `--align translation|euclidean|none`, `--anchor-point cx,cy`,
   A healthy scan ramps monotonically from `-X` to `+X` and sums to zero.
 
 ## UI notes
+- Playback (fps, ping-pong, reverse, play/pause) lives in a transport bar under the
+  viewer, not the inspector. It is a property of the viewer rather than of any step,
+  which is why it felt homeless in a sidebar whose meaning changes.
+- The step rail doubles as a health readout: width spread, lock score, how many
+  frames are hand-adjusted, and the last export's verdict. One glance replaces
+  reading three numbers out of three panels.
+- The filmstrip carries per-frame state — playing, selected, and either the nudge
+  offset or the last export's `cc`. Nudge takes precedence when both exist, since a
+  hand offset is the more recent intent.
+- `--stabilize` scales the measured shift: 1.0 pins the subject, less keeps some of
+  its drift, more overshoots so it swings the other way. With only four real views
+  this cannot invent parallax, it redistributes it. Applied after recentring and
+  before nudges, and the browser applies the same order so preview matches export.
 - The realtime anchor preview exists because ECC costs **~30s per anchor** at full
   resolution — measured, not estimated. Interactive selection through ECC is not
   possible, so `ui.py` precomputes the dense parallax field once (~0.4s) and every
