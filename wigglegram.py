@@ -408,7 +408,8 @@ def auto_anchor(frames, default_anchor=(0.5, 0.6, 0.45, 0.55), mode="translation
 
 
 def align_frames(frames, anchor=(0.5, 0.6, 0.45, 0.55), mode="translation",
-                 ref_index=0, repair=False, mask=None, flow=None, seed=True):
+                 ref_index=0, repair=False, mask=None, flow=None, seed=True,
+                 nudge=None):
     """Register frames so the subject inside the anchor box stays fixed.
 
     Uses masked ECC so only the subject region drives the estimate (the busy
@@ -445,6 +446,17 @@ def align_frames(frames, anchor=(0.5, 0.6, 0.45, 0.55), mode="translation",
         for w in warps:
             w[0, 2] -= mean_t[0]
             w[1, 2] -= mean_t[1]
+
+    if nudge:
+        # Hand corrections, in full-resolution pixels, as "move this frame's
+        # content right/down by n". Applied *after* recentring so a nudge means
+        # exactly what it says -- fold it in earlier and the mean absorbs part of
+        # it, so correcting one frame would visibly shift all the others.
+        # Subtracted because the warp is applied with WARP_INVERSE_MAP, where a
+        # positive translation samples further right and moves content left.
+        for w, nd in zip(warps, nudge):
+            w[0, 2] -= float(nd[0])
+            w[1, 2] -= float(nd[1])
 
     aligned, valids, shifts = [], [], []
     for f, w in zip(frames, warps):
@@ -737,8 +749,8 @@ def save_debug(img, y0, y1, xranges, frames, box, base):
 # ----------------------------------------------------------------------------
 def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
                     anchor=(0.5, 0.6, 0.45, 0.55), point=None, pick=False, auto=False,
-                    band=None, cuts=None, repair=False, pingpong=True, reverse=False,
-                    max_height=600, inset=0.01, debug=False):
+                    band=None, cuts=None, repair=False, nudge=None, pingpong=True,
+                    reverse=False, max_height=600, inset=0.01, debug=False):
     img = cv2.imread(path, cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(f"Could not read image: {path}")
@@ -800,7 +812,11 @@ def make_wigglegram(path, out, n_frames=4, fps=8, align="translation",
             print("  anchor    : %s after %d candidate(s), "
                   "--anchor %.3f,%.3f,%.3f,%.3f" % ((source, tried) + anchor))
         frames, box, shifts, ccs = align_frames(frames, anchor=anchor, mode=align,
-                                                repair=repair, mask=amask, flow=aflow)
+                                                repair=repair, mask=amask, flow=aflow,
+                                                nudge=nudge)
+        if nudge and any(any(v) for v in nudge):
+            print("  nudge     : --nudge " +
+                  ",".join(f"{v:g}" for nd in nudge for v in nd))
         n_good = sum(1 for cc in ccs if cc >= _MIN_CC)
         fixed = repair and n_good >= 2
         print(f"  align     : {align}, {desc}")
@@ -860,6 +876,13 @@ def _parse_point(s):
     return tuple(v)
 
 
+def _parse_nudge(s):
+    v = [float(x) for x in s.split(",")]
+    if len(v) % 2:
+        raise argparse.ArgumentTypeError("nudge needs dx,dy per frame (an even count)")
+    return [(v[i], v[i + 1]) for i in range(0, len(v), 2)]
+
+
 def _parse_band(s):
     v = [int(x) for x in s.split(",")]
     if len(v) != 2 or v[0] >= v[1]:
@@ -895,6 +918,8 @@ def main():
                     help="override the band as y0,y1 in pixels")
     ap.add_argument("--cuts", type=_parse_cuts,
                     help="override the frame cuts as n_frames+1 pixel positions")
+    ap.add_argument("--nudge", type=_parse_nudge,
+                    help="hand offsets as dx,dy per frame in pixels, e.g. 0,0,4,-2,0,0,0,0")
     ap.add_argument("--repair-weak", action="store_true",
                     help="replace shifts of frames that failed to lock with a "
                          "linear-parallax prediction from the frames that did")
@@ -910,7 +935,7 @@ def main():
     make_wigglegram(args.input, out, n_frames=args.frames, fps=args.fps, align=args.align,
                     anchor=args.anchor, point=args.anchor_point, pick=args.pick_anchor,
                     auto=args.auto_anchor, band=args.band, cuts=args.cuts,
-                    repair=args.repair_weak,
+                    repair=args.repair_weak, nudge=args.nudge,
                     pingpong=not args.no_pingpong, reverse=args.reverse,
                     max_height=args.max_height, inset=args.inset, debug=args.debug)
 

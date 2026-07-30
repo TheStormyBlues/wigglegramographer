@@ -60,6 +60,7 @@ python wigglegram.py scan.jpg --fps 10 --reverse
 | `--auto-anchor` | Choose the subject box automatically, verified by lock score. |
 | `--band y0,y1` | Override the detected image band, in pixels. |
 | `--cuts x0,...,xN` | Override the frame cut positions, in pixels. |
+| `--nudge dx,dy,...` | Hand offsets per frame in pixels, on top of the measured alignment. |
 | `--repair-weak` | Infer shifts for frames that fail to lock from the ones that did. |
 | `--frames N` | Number of frames on the scan (default 4). |
 | `--fps`, `--reverse`, `--no-pingpong` | Playback speed, direction, and loop style. |
@@ -124,6 +125,13 @@ Two readouts come free from that same field:
 - **Depth overlay** — parallax magnitude is a direct proxy for distance, so this
   false-colours the picture by how near things are. Useful because anchoring on
   the background freezes the background and makes your subject wiggle instead.
+
+**Fine tune** — automatic registration doesn't always cooperate, so you can correct
+a frame by hand. Click a thumbnail (or press <kbd>1</kbd>–<kbd>4</kbd>) to select a
+frame and nudge it with the <kbd>arrow keys</kbd>; hold <kbd>Shift</kbd> for bigger
+steps. <kbd>Space</kbd> pauses the loop so you can flip between two frames and line
+them up by eye. Offsets are carried through to the export, and the run prints them
+back as a `--nudge` string so a hand-tuned result is reproducible.
 
 After an export the page reports what actually happened: the real per-frame lock
 score under each thumbnail, and a plain verdict naming any frame that failed to

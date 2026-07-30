@@ -213,6 +213,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     anchor=tuple(req.get("anchor", (0.5, 0.6, 0.45, 0.55))),
                     band=tuple(STATE["band"]),
                     cuts=STATE["cuts"], repair=req.get("repair", False),
+                    nudge=[tuple(n) for n in req.get("nudge") or []] or None,
                     pingpong=req.get("pingpong", True), reverse=req.get("reverse", False),
                     max_height=req.get("maxHeight", 600), inset=STATE["inset"])
                 res["out"] = os.path.abspath(out)
@@ -253,7 +254,9 @@ canvas{display:block;border-radius:4px;cursor:crosshair;background:#000;
 #strip{display:flex;gap:8px}
 #strip .f{text-align:center;color:var(--dim);font-size:11px}
 #strip img{height:60px;border-radius:3px;display:block;border:2px solid transparent}
+#strip img{cursor:pointer}
 #strip .on img{border-color:var(--accent)}
+#strip .sel img{outline:2px solid var(--warn);outline-offset:2px}
 #strip .cc{font-variant-numeric:tabular-nums;font-size:10px;color:var(--dim)}
 #strip .cc.good{color:var(--good)}
 #strip .cc.bad{color:var(--bad)}
@@ -330,6 +333,17 @@ button:disabled{opacity:.45;cursor:default}
         subject instead of straddling foreground and background. <b>M</b> toggles the
         mask.</div>
     </div>
+    <div class="sec" id="tuneSec">
+      <h2>Fine tune</h2>
+      <div class="row"><label>frame</label><span class="val" id="selv">—</span></div>
+      <div class="row"><label>offset</label><span class="val" id="nudv">0, 0</span></div>
+      <div class="row"><button id="nudclr">Clear frame</button>
+        <button id="nudall">Clear all</button></div>
+      <div class="hint">Click a thumbnail (or press <b>1</b>–<b>4</b>) to select a frame,
+        then nudge it with the <b>arrow keys</b> — hold <b>Shift</b> for bigger steps.
+        <b>Space</b> pauses the loop so you can flip between two frames and line them
+        up by eye. These offsets are carried into the export.</div>
+    </div>
     <div class="sec">
       <h2>Playback</h2>
       <div class="row"><label>fps</label>
@@ -355,7 +369,8 @@ const $ = s => document.querySelector(s);
 let D = null, S = null, imgs = [], scanImg = null, mode = 'wiggle';
 let point = {x:.5, y:.6}, showDepth = false, showRegion = true, drag = null;
 let shifts = [], padX = 0, padY = 0, depthCanvas = null, regionCanvas = null, region = null;
-let t0 = 0, step = 0, cur = 0;
+let t0 = 0, step = 0, cur = 0, sel = 0, paused = false;
+let nudges = [];                 // per frame [dx, dy] in FULL-RESOLUTION pixels
 const msg = t => $('#msg').textContent = t || '';
 
 // --- loading ---------------------------------------------------------------
@@ -382,11 +397,12 @@ async function doPrepare(body) {
     D = await api('/api/prepare', {method:'POST', body: JSON.stringify(body || {})});
     imgs = await Promise.all(D.frames.map(src => new Promise((res, rej) => {
       const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; })));
+    if (nudges.length !== imgs.length) nudges = imgs.map(() => [0, 0]);
     $('#strip').innerHTML = imgs.map((im, k) =>
       `<div class="f" id="f${k}"><img src="${im.src}"><div>${k+1}</div>` +
       `<div class="cc" id="cc${k}">&nbsp;</div></div>`).join('');
     S.band = D.band; S.cuts = D.cuts; syncCropPanel();
-    buildDepth(); update(); setMode('wiggle'); msg('');
+    buildDepth(); syncTune(); update(); setMode('wiggle'); msg('');
     $('#export').disabled = false;
   } catch (e) { msg(e.message); }
 }
@@ -523,6 +539,13 @@ function update() {
   const my = shifts.reduce((a,s)=>a+s[1],0)/shifts.length;
   shifts = shifts.map(s => [s[0]-mx, s[1]-my]);
 
+  // Hand offsets are stored in full-resolution pixels but applied here in
+  // preview pixels, and subtracted to match the engine's warp convention.
+  shifts = shifts.map((s, i) => {
+    const nd = nudges[i] || [0, 0];
+    return [s[0] - nd[0]*D.scale, s[1] - nd[1]*D.scale];
+  });
+
   const T = D.tensor; let a = 0, d = 0, b = 0, n = 0;
   for (let y = 0; y < g.h; y++) for (let x = 0; x < g.w; x++)
     if (m[y*g.w+x]) { a += T.xx[y][x]; d += T.yy[y][x]; b += T.xy[y][x]; n++; }
@@ -587,11 +610,30 @@ function order() {
   return s;
 }
 function loop(t) {
-  if (mode === 'wiggle' && D && imgs.length) {
+  if (mode === 'wiggle' && D && imgs.length && !paused) {
     const seq = order(), ms = 1000 / (+$('#fps').value);
     if (t - t0 > ms) { t0 = t; step = (step+1) % seq.length; cur = seq[step]; render(); }
   }
   requestAnimationFrame(loop);
+}
+
+function selectFrame(i) {
+  if (!imgs.length) return;
+  sel = Math.max(0, Math.min(imgs.length - 1, i));
+  if (paused) { cur = sel; }
+  syncTune(); render();
+}
+function syncTune() {
+  $('#selv').textContent = imgs.length ? (sel + 1) + ' of ' + imgs.length : '—';
+  const nd = nudges[sel] || [0, 0];
+  $('#nudv').textContent = `${nd[0].toFixed(0)}, ${nd[1].toFixed(0)} px` +
+    (paused ? '   (paused)' : '');
+}
+function nudge(dx, dy) {
+  if (!D || !nudges[sel]) return;
+  const stepPx = Math.max(1, Math.round(1 / D.scale));   // ~1 preview pixel
+  nudges[sel][0] += dx * stepPx; nudges[sel][1] += dy * stepPx;
+  syncTune(); update();
 }
 // The wiggle canvas shows the frame minus the alignment margins, so point
 // fractions (in FRAME coordinates) shift by that margin to land on what is
@@ -640,7 +682,7 @@ function render() {
   ctx.moveTo(px,py-15); ctx.lineTo(px,py-4); ctx.moveTo(px,py+4); ctx.lineTo(px,py+15);
   ctx.stroke();
   [...document.querySelectorAll('#strip .f')].forEach((e,k) =>
-    e.className = 'f' + (k === cur ? ' on' : ''));
+    e.className = 'f' + (k === cur ? ' on' : '') + (k === sel ? ' sel' : ''));
 }
 
 // --- pointer ---------------------------------------------------------------
@@ -686,8 +728,28 @@ function markToggle(el, on) {
 }
 $('#reg').onclick = () => { showRegion = !showRegion; markToggle($('#reg'), showRegion); render(); };
 markToggle($('#reg'), showRegion);
-addEventListener('keydown', e => {          // quick peek without leaving the mouse
-  if (e.key === 'm' || e.key === 'M') { showRegion = !showRegion; markToggle($('#reg'), showRegion); render(); }
+$('#nudclr').onclick = () => { if (nudges[sel]) { nudges[sel] = [0,0]; syncTune(); update(); } };
+$('#nudall').onclick = () => { nudges = nudges.map(() => [0,0]); syncTune(); update(); };
+$('#strip').addEventListener('click', e => {
+  const f = e.target.closest('.f'); if (!f) return;
+  selectFrame([...$('#strip').children].indexOf(f));
+});
+
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const k = e.key, big = e.shiftKey ? 5 : 1;
+  if (k === 'm' || k === 'M') {
+    showRegion = !showRegion; markToggle($('#reg'), showRegion); render();
+  } else if (k === ' ') {
+    paused = !paused; if (paused) cur = sel; syncTune(); render();
+  } else if (k >= '1' && k <= '9') {
+    selectFrame(+k - 1);
+  } else if (k === 'ArrowLeft')  { nudge(-big, 0);
+  } else if (k === 'ArrowRight') { nudge(+big, 0);
+  } else if (k === 'ArrowUp')    { nudge(0, -big);
+  } else if (k === 'ArrowDown')  { nudge(0, +big);
+  } else return;
+  e.preventDefault();
 });
 ['fps','mh'].forEach(k => $('#'+k).oninput = () => $('#'+k+'v').textContent = $('#'+k).value);
 
@@ -696,7 +758,7 @@ $('#export').onclick = async () => {
   $('#result').textContent = ''; $('#result').className = '';
   try {
     const r = await api('/api/export', {method:'POST', body: JSON.stringify({
-      point: [point.x, point.y], fps: +$('#fps').value,
+      point: [point.x, point.y], nudge: nudges, fps: +$('#fps').value,
       pingpong: $('#pp').checked, reverse: $('#rev').checked,
       maxHeight: +$('#mh').value, repair: $('#rp').checked})});
     showResult(r);

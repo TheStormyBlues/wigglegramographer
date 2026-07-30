@@ -107,6 +107,16 @@ Key flags: `--align translation|euclidean|none`, `--anchor-point cx,cy`,
   prior: parallax magnitude is a direct proxy for distance, so foreground regions
   shift more between lenses. Prefer candidates that lock well *and* show large
   shift, rather than lock quality alone. This is why the flag stays opt-in.
+- `--nudge dx,dy,...` applies hand offsets per frame, in full-resolution pixels, on
+  top of the measured alignment. Two details matter: they are applied **after** the
+  mean-centring, because folding them in earlier lets the mean absorb part of the
+  correction so fixing one frame visibly moves all the others; and they are
+  **subtracted** from the warp, since `WARP_INVERSE_MAP` means a positive
+  translation samples further right and therefore moves content left. The UI drives
+  this with arrow keys and prints the result back as a `--nudge` string.
+- Manual nudging is the interactive escape hatch for every alignment failure the
+  automatic path cannot fix. With a roll being ~16 scans, hand-correcting one frame
+  is cheaper than another round of heuristic tuning — see the priority note below.
 - `--repair-weak` (opt-in) replaces weak frames' shifts with a linear fit through
   the frames that did lock. The four lenses sit on a fixed pitch, so shift is
   linear in frame index for any one depth plane. Needs >= 2 good frames; with
@@ -181,15 +191,29 @@ Key flags: `--align translation|euclidean|none`, `--anchor-point cx,cy`,
 Both exit non-zero on failure. `validate_gif.py` exists because a GIF can be badly
 broken while looking normal — see the export notes above.
 
+## Priorities
+Favour the interactive UI over more accurate automatic processing. A roll is only
+~16 scans, and shooting, developing and digitising them dwarfs the GIF step, so
+automation saves very little; a refined interactive tool is worth more. Two things
+were parked on these grounds: the grid fit for `_DSC5472`'s cuts (you can drag the
+cut lines in seconds) and a depth prior for `--auto-anchor` (moot if the subject is
+always clicked). Engine work that *serves* the interaction is still worth doing —
+the parallax field is what makes the realtime preview possible and `cc` is what
+makes an export trustworthy. The distinction is between removing a decision from
+the user and making the interactive result fast and correct.
+
 ## Next up (Phase 3)
-- Fix `_DSC5472`: still 5.1% width spread even with the taller band. Candidate is a
-  grid fit — autocorrelate the column profile for the frame pitch, then solve for the
-  phase that puts the three gaps in the darkest columns, making widths even by
-  construction.
-- Give `--auto-anchor` a depth prior so it prefers the foreground subject, not just
-  the firmest lock (see the `_DSC5463` case above), then consider making it default.
-- Optional local web UI (Gradio or Streamlit) for drag-and-drop + interactive anchor.
+UI features, in rough order of value (see Priorities above):
+- Faster iteration: draft export with ECC at half resolution (~4x faster, the shift
+  scales up fine) plus real progress reporting, instead of a 30-60s frozen button.
+- Roll browser: point it at a folder, click between scans without restarting, and
+  persist band/cuts/point/playback per scan in a sidecar file.
+- Frame order and selection: reorder, drop an unusable frame, loop styles beyond
+  ping-pong, hold on end frames.
+- Deskew, never built though the original plan calls for it.
 - MP4 / WebP export alongside GIF.
+
+Parked: grid fit for `_DSC5472`'s cuts, and a depth prior for `--auto-anchor`.
 
 ## Conventions
 - Keep it a single-file CLI for now; don't add a framework prematurely.
